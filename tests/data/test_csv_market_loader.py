@@ -233,6 +233,16 @@ def test_missing_symbol_fails_clearly(tmp_path):
         load_csv_market_data(write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,100,"))
 
 
+def test_missing_symbol_raises_a_dedicated_error_type(tmp_path):
+    from app.data.loaders.csv_market_loader import SymbolRequiredError
+
+    path = write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,100,", name="my prices.csv")
+    with pytest.raises(SymbolRequiredError):
+        load_csv_market_data(path)
+    with pytest.raises(SymbolRequiredError):          # file name is not exactly a symbol
+        load_csv_market_data(path, infer_symbol_from_filename=True)
+
+
 def test_symbol_from_filename_only_when_enabled(tmp_path):
     path = write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,100,", name="JKH.N0000.csv")
 
@@ -425,3 +435,54 @@ def test_unrecognised_columns_are_reported(tmp_path):
                      header=HEADER + ",Notes")
     result = load_csv_market_data(path, symbol="T")
     assert result.report.ignored_columns["Notes"] == "not a recognised market-data column"
+
+
+# --- delimiters (tab-separated data pasted from spreadsheets, etc.) -----------------------------
+
+TAB_ROWS = ("Date\tPrice\tOpen\tHigh\tLow\tVol.\tChange %\n"
+            "12/31/2025\t101.20\t102.10\t102.40\t100.90\t7.94M\t-0.78%\n"
+            "12/30/2025\t102.00\t100.90\t102.30\t100.60\t9.19M\t1.24%\n"
+            "12/29/2025\t100.75\t101.40\t101.60\t100.50\t7,130,000\t-0.74%\n")
+
+
+@pytest.mark.parametrize("name", ["prices.csv", "prices.tsv", "prices.txt"])
+def test_tab_separated_data_without_symbol_column_imports(tmp_path, name):
+    path = tmp_path / name
+    path.write_text(TAB_ROWS, encoding="utf-8")
+
+    result = load_csv_market_data(path, symbol="TEST.N0000")
+
+    assert result.report.delimiter == "\t"
+    assert result.validation.status is DatasetStatus.PASS
+    assert result.report.column_mapping["Price"] == "close"
+    assert list(result.data["volume"]) == [7_940_000, 9_190_000, 7_130_000]  # unquoted comma value
+    assert list(result.data["symbol"].unique()) == ["TEST.N0000"]
+
+
+def test_tab_separated_data_still_requires_a_symbol(tmp_path):
+    path = tmp_path / "prices.tsv"
+    path.write_text(TAB_ROWS, encoding="utf-8")
+    with pytest.raises(MarketDataImportError, match="no Symbol column"):
+        load_csv_market_data(path)
+
+
+@pytest.mark.parametrize("delimiter", [";", "|"])
+def test_semicolon_and_pipe_separated_data(tmp_path, delimiter):
+    path = tmp_path / "prices.csv"
+    path.write_text(TAB_ROWS.replace("\t", delimiter).replace("7,130,000", "7130000"),
+                    encoding="utf-8")
+    result = load_csv_market_data(path, symbol="T")
+    assert result.report.delimiter == delimiter
+    assert result.validation.status is DatasetStatus.PASS
+
+
+def test_delimiter_is_detected_from_header_ignoring_quoted_text(tmp_path):
+    from app.data.loaders.cse_market_loader import detect_delimiter
+
+    quoted = tmp_path / "quoted.csv"
+    quoted.write_text('"Date","Close, Rs","Open"\n', encoding="utf-8")
+    single = tmp_path / "single.csv"
+    single.write_text("Date\n", encoding="utf-8")
+
+    assert detect_delimiter(quoted) == ","
+    assert detect_delimiter(single) == ","

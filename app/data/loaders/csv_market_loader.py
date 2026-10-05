@@ -30,7 +30,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.data.loaders.cse_market_loader import load_raw_market_file
+from app.data.loaders.cse_market_loader import TEXT_SUFFIXES, load_raw_market_file
 from app.data.schemas.market_schema import (
     MISSING_TOKENS,
     derived_fields_used,
@@ -77,6 +77,14 @@ _DAY_MONTH_YEAR = r"^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$"
 
 class MarketDataImportError(ValueError):
     """The file cannot be imported at all (row-level problems are reported, not raised)."""
+
+
+class SymbolRequiredError(MarketDataImportError):
+    """The data has no Symbol column and no symbol was supplied.
+
+    Callers with a user interface should ask the user for the symbol and retry;
+    ExitSafe never guesses it.
+    """
 
 
 # --- value parsing --------------------------------------------------------------------------
@@ -343,13 +351,13 @@ def _apply_symbol(out, result, symbol, file_name, infer_symbol_from_filename):
     elif infer_symbol_from_filename:
         stem = Path(file_name).stem if file_name else ""
         if not SYMBOL_FILENAME.fullmatch(stem):
-            raise MarketDataImportError(
+            raise SymbolRequiredError(
                 f"Cannot infer a symbol from the file name {file_name!r}: the name must be exactly "
                 "a symbol, e.g. 'JKH.N0000.csv'. Pass symbol=... instead.")
         out["symbol"] = stem.upper()
         result.symbol_source = "file name"
     else:
-        raise MarketDataImportError(
+        raise SymbolRequiredError(
             "The file has no Symbol column and no symbol was given. Pass the security, e.g. "
             "load_csv_market_data(path, symbol='JKH.N0000'). ExitSafe does not guess the company.")
 
@@ -384,6 +392,7 @@ class ImportReport:
     symbols: list[str]
     symbol_source: str
     detected_columns: list[str]
+    delimiter: str
     column_mapping: dict[str, str]
     ignored_columns: dict[str, str]
     normalized_columns: list[str]
@@ -417,7 +426,10 @@ def load_csv_market_data(file_path, symbol=None, *, source_name=USER_CSV_SOURCE,
                          infer_symbol_from_filename=False, date_format=None, retrieval_time=None,
                          source_url=None, source_version=None,
                          change_pct_tolerance=CHANGE_PCT_TOLERANCE):
-    """Import a provider CSV into canonical market data.
+    """Import a provider CSV/TSV/TXT file into canonical market data.
+
+    The delimiter (comma, tab, semicolon or pipe) is detected automatically, so
+    tab-separated rows pasted from a spreadsheet or web table work unchanged.
 
     symbol: required when the file has no Symbol column (unless
         ``infer_symbol_from_filename`` is True and the file name is exactly a symbol).
@@ -428,8 +440,10 @@ def load_csv_market_data(file_path, symbol=None, *, source_name=USER_CSV_SOURCE,
     row-level problems are reported in the result instead.
     """
     path = Path(file_path)
-    if path.suffix.lower() != ".csv":
-        raise MarketDataImportError(f"Expected a .csv file, got {path.name!r}")
+    if path.suffix.lower() not in TEXT_SUFFIXES:
+        raise MarketDataImportError(
+            f"Expected a .csv, .tsv or .txt file (comma, tab, semicolon or pipe separated), "
+            f"got {path.name!r}")
     try:
         raw = load_raw_market_file(path, source_name, retrieval_time=retrieval_time,
                                    source_url=source_url, source_version=source_version)
@@ -455,6 +469,7 @@ def load_csv_market_data(file_path, symbol=None, *, source_name=USER_CSV_SOURCE,
                        .astype(str).str.strip().unique()),
         symbol_source=normalized.symbol_source,
         detected_columns=[str(c) for c in raw.data.columns],
+        delimiter=raw.delimiter,
         column_mapping=normalized.column_mapping,
         ignored_columns=normalized.ignored_columns,
         normalized_columns=([c for c in canonical.columns if canonical[c].notna().any()]

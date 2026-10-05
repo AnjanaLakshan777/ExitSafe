@@ -84,8 +84,16 @@ drops invalid rows. Moving analytics onto the canonical schema is a later step.
 
 ## 2a. Generic CSV market-data import
 
-`app/data/loaders/csv_market_loader.py` imports historical price CSVs from
-different providers **without editing the file**. Example of a supported layout:
+`app/data/loaders/csv_market_loader.py` imports historical price files from
+different providers **without editing the file**.
+
+- **File types:** `.csv`, `.tsv` and `.txt`.
+- **Delimiters:** comma, tab, semicolon or pipe, detected from the header line.
+  Tab-separated rows copied from a spreadsheet or web table work as they are.
+- **Report:** the detected delimiter is listed in the import report
+  (`delimiter`).
+
+Example of a supported layout:
 
 ```
 Date,Price,Open,High,Low,Vol.,Change %
@@ -178,7 +186,8 @@ are errors; `CHANGE_PCT_MISMATCH` and `CHANGE_PCT_UNREADABLE` are warnings.
 the file comes from a catalogued provider.
 
 **Not supported yet:**
-- delimiters other than `,`
+- decimal commas (`660,09`, common with semicolon-separated files); these are
+  reported as unreadable rather than misread
 - text dates such as `Dec 31, 2025`
 - two-digit years
 - files without open/high/low/volume columns: these are reported as `FAIL`
