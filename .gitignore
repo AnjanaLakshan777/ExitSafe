@@ -5,5 +5,19 @@ __pycache__/
 .streamlit/secrets.toml
 .env
 .DS_Store
-data/raw/*
-data/processed/*
+
+# Raw and processed data stay local (external datasets, downloads, generated
+# reports). Only the folder structure (.gitkeep) is tracked. Small fixtures
+# belong in data/sample/.
+data/raw/**
+data/processed/**
+!data/raw/**/
+!data/processed/**/
+!data/**/.gitkeep
+
+# Large data formats anywhere else in the repo
+*.parquet
+*.feather
+*.h5
+*.zip
+*.gz
