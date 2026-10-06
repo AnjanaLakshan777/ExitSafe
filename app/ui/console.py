@@ -33,6 +33,13 @@ from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
+from app.portfolio.optimizer import (
+    LIQUIDITY_AT_LIMIT,
+    LIQUIDITY_NO_DATA,
+    LIQUIDITY_NOT_APPLIED,
+    LIQUIDITY_WITHIN_LIMIT,
+    optimize_portfolio,
+)
 from app.data.loaders.csv_market_loader import (
     MarketDataImportError,
     SymbolRequiredError,
@@ -465,3 +472,74 @@ def portfolio_holdings_display(result):
         "Position / ADTV": [_amount(v, 3) for v in holdings["position_to_adtv"]],
         "Estimated Liquidation Days": [_amount(v) for v in holdings["estimated_liquidation_days"]],
     })
+
+
+LIQUIDITY_STATUS_LABELS = {LIQUIDITY_AT_LIMIT: "At limit",
+                           LIQUIDITY_WITHIN_LIMIT: "Within limit",
+                           LIQUIDITY_NO_DATA: "No liquidity data (not constrained)",
+                           LIQUIDITY_NOT_APPLIED: "Not applied"}
+
+
+def optimize(data, symbols, min_weight_percent, max_weight_percent, risk_aversion, cvar_weight,
+             return_weight, confidence_percent, min_observations, periods_per_year,
+             portfolio_value, liquidity_enabled, max_position_to_adtv=None):
+    """(OptimizationResult, error message). Percent inputs are entered as 40.0 = 40%."""
+    try:
+        return optimize_portfolio(
+            data, list(symbols), risk_aversion=float(risk_aversion),
+            cvar_weight=float(cvar_weight), return_weight=float(return_weight),
+            confidence_level=confidence_percent / 100, min_observations=int(min_observations),
+            periods_per_year=periods_per_year, min_weight=min_weight_percent / 100,
+            max_weight=max_weight_percent / 100, portfolio_value=float(portfolio_value),
+            liquidity_constraint_enabled=bool(liquidity_enabled),
+            max_position_to_adtv=(float(max_position_to_adtv) if liquidity_enabled else None)), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def optimization_allocation_display(result):
+    """A new, display-only allocation table (with liquidity columns when the constraint is on)."""
+    liquidity = result.liquidity
+    table = pd.DataFrame({
+        "Symbol": liquidity["symbol"],
+        "Weight %": [format_percent(w) for w in liquidity["weight"]],
+        "Position (Rs.)": [_amount(v) for v in liquidity["position_value"]],
+    })
+    if result.liquidity_constraint_enabled:
+        table["ADTV (Rs.)"] = [_amount(v) for v in liquidity["average_daily_traded_value"]]
+        table["ADTV Source"] = [TRADED_VALUE_SOURCE_LABELS.get(s, "n/a")
+                                for s in liquidity["traded_value_source"]]
+        table["Position / ADTV"] = [_amount(v, 3) for v in liquidity["position_to_adtv"]]
+        table["Liquidity Constraint Status"] = [LIQUIDITY_STATUS_LABELS[s] for s in
+                                                liquidity["liquidity_constraint_status"]]
+    return table
+
+
+def optimization_metrics_display(result):
+    """A new, display-only Metric / Value table of the optimized portfolio."""
+    rows = [
+        ("Expected Annual Return (historical, arithmetic)",
+         format_percent(result.expected_annual_return)),
+        ("Annualized Volatility", format_percent(result.annualized_volatility)),
+        ("Historical VaR (1-day)", format_percent(result.historical_var)),
+        ("Historical CVaR (1-day)", format_percent(result.historical_cvar)),
+        ("HHI (concentration)", f"{result.hhi:.4f}"),
+        ("Maximum Weight", format_percent(result.max_weight)),
+        ("Observations", f"{result.observations} common days ({result.start_date.date()} to "
+                         f"{result.end_date.date()})"),
+        ("Solver Status", f"{result.solver_status} ({result.solver})"),
+        ("Objective Value (daily units)", f"{result.objective_value:.6g}"),
+    ]
+    return pd.DataFrame(rows, columns=["Metric", "Value"])
+
+
+def optimization_comparison_display(result):
+    """Equal weight vs optimized on the same scenarios; numbers only, no verdict."""
+    ew, opt = result.equal_weight_metrics, result.metrics
+    rows = [("Annualized Return", ew.expected_annual_return, opt.expected_annual_return),
+            ("Annualized Volatility", ew.annualized_volatility, opt.annualized_volatility),
+            ("Historical VaR (1-day)", ew.historical_var, opt.historical_var),
+            ("Historical CVaR (1-day)", ew.historical_cvar, opt.historical_cvar)]
+    table = [(name, format_percent(a), format_percent(b)) for name, a, b in rows]
+    table.append(("HHI", f"{ew.hhi:.4f}", f"{opt.hhi:.4f}"))
+    return pd.DataFrame(table, columns=["Metric", "Equal Weight", "ExitSafe Optimized"])

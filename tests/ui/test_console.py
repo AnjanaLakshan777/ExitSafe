@@ -385,3 +385,74 @@ def test_portfolio_risk_reports_analytics_errors():
     assert result is None and "Duplicate" in error
     result, error = portfolio_risk(data, [(SAMPLE_SYMBOL, 1.0)], 1_000_000, 95.0, 20, 252, 10.0)
     assert error is None and not result.sufficient_tail_data and result.observations == 4
+
+
+def test_optimize_takes_percent_inputs_and_builds_tables():
+    from app.ui.console import (MULTI_SYMBOL_SAMPLE_CSV, optimization_allocation_display,
+                                optimization_comparison_display, optimization_metrics_display,
+                                optimize)
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = optimize(data, ["ABC", "LMN", "XYZ"], 0.0, 40.0, 1.0, 1.0, 1.0, 95.0, 20, 252,
+                             20_000_000, False)
+    assert error is None
+    assert result.max_weight_limit == pytest.approx(0.40) and result.confidence_level == pytest.approx(0.95)
+    assert result.max_weight <= 0.40 + 1e-6
+
+    allocation = optimization_allocation_display(result)
+    assert list(allocation.columns) == ["Symbol", "Weight %", "Position (Rs.)"]
+    metrics = dict(zip(*optimization_metrics_display(result).T.values))
+    assert metrics["Solver Status"] == "optimal (CLARABEL)"
+    assert metrics["Historical CVaR (1-day)"] == format_percent(result.historical_cvar)
+    comparison = optimization_comparison_display(result)
+    assert list(comparison.columns) == ["Metric", "Equal Weight", "ExitSafe Optimized"]
+    assert list(comparison["Metric"]) == ["Annualized Return", "Annualized Volatility",
+                                          "Historical VaR (1-day)", "Historical CVaR (1-day)", "HHI"]
+    assert comparison.iloc[-1]["Equal Weight"] == "0.3333"
+    text = " ".join(map(str, comparison.to_numpy().ravel())).upper()
+    assert not any(word in text for word in ("BETTER", "BUY", "SELL", "SAFE"))
+
+
+def test_optimize_with_liquidity_shows_labelled_liquidity_columns():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, optimization_allocation_display, optimize
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = optimize(data, ["ABC", "LMN", "XYZ"], 0.0, 60.0, 1.0, 1.0, 1.0, 95.0, 20, 252,
+                             20_000_000, True, 3.0)
+    assert error is None
+    table = optimization_allocation_display(result).set_index("Symbol")
+    assert list(table.columns)[-4:] == ["ADTV (Rs.)", "ADTV Source", "Position / ADTV",
+                                        "Liquidity Constraint Status"]
+    assert table.loc["LMN", "Liquidity Constraint Status"] == "At limit"
+    assert set(table["ADTV Source"]) == {"Actual turnover"}
+
+    one = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    estimated, _ = optimize(one, [SAMPLE_SYMBOL], 0.0, 100.0, 1.0, 1.0, 1.0, 95.0, 4, 252,
+                            1_000, True, 10.0)
+    assert list(optimization_allocation_display(estimated)["ADTV Source"]) == [
+        "Estimated (close × volume)"]
+
+
+@pytest.mark.parametrize("args, message", [
+    ((["ABC", "LMN", "XYZ"], 0.0, 30.0), "cannot be fully invested"),
+    ((["ABC", "LMN", "XYZ"], 40.0, 100.0), "minimum weight"),
+    (([], 0.0, 40.0), "Select at least one stock"),
+])
+def test_optimize_reports_errors(args, message):
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, optimize
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = optimize(data, *args, 1.0, 1.0, 1.0, 95.0, 20, 252, 20_000_000, False)
+    assert result is None and message in error
+
+
+def test_optimize_reports_infeasible_liquidity_and_insufficient_data():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, optimize
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = optimize(data, ["ABC", "LMN", "XYZ"], 0.0, 40.0, 1.0, 1.0, 1.0, 95.0, 20, 252,
+                             20_000_000, True, 1.0)
+    assert result is None and "Infeasible liquidity constraint" in error
+    result, error = optimize(data, ["ABC", "LMN", "XYZ"], 0.0, 40.0, 1.0, 1.0, 1.0, 95.0, 30, 252,
+                             20_000_000, False)
+    assert result is None and "Only 24 common daily return" in error

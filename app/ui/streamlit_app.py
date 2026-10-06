@@ -38,6 +38,10 @@ from app.ui.console import (  # noqa: E402
     liquidity_summary,
     matrix_display,
     maximum_drawdown_display,
+    optimization_allocation_display,
+    optimization_comparison_display,
+    optimization_metrics_display,
+    optimize,
     parse_holdings,
     pasted_bytes,
     portfolio_holdings_display,
@@ -120,7 +124,8 @@ def main():
     confidence, minimum = show_var(outcome)
     show_cvar(outcome, confidence, minimum)
     participation = show_liquidity(outcome)
-    show_portfolio_risk(outcome, confidence, minimum, periods, participation)
+    value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
+    show_optimization(outcome, confidence, minimum, periods, value, participation)
 
 
 def show_import(result):
@@ -425,12 +430,12 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
     holdings, error = parse_holdings(holdings_text)
     if error:
         st.error(error)
-        return
+        return value
     result, error = portfolio_risk(data, holdings, value, confidence, minimum, periods,
                                    participation)
     if error:
         st.error(error)
-        return
+        return value
     if result.observations < 2:
         st.warning(f"Fewer than 2 common return observations ({result.observations}): portfolio "
                    "statistics are n/a.")
@@ -466,6 +471,78 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
             "- These figures describe the past at constant weights. There is no rebalancing, "
             "transaction cost or market impact, and they are not a buy or sell "
             "recommendation.")
+    return value
+
+
+def show_optimization(outcome, confidence, minimum, periods, portfolio_value, participation):
+    data = outcome.import_result.data
+    st.divider()
+    st.subheader("Risk-Aware Portfolio Optimization")
+    st.caption("Chooses long-only, fully invested weights for the selected stocks. A historical "
+               "quantitative allocation model, not a guarantee of future returns.")
+    symbols = sorted(data["symbol"].dropna().unique())
+    universe = st.multiselect("Stocks to optimize (universe)", symbols, default=symbols)
+    left, right = st.columns(2)
+    min_percent = left.number_input("Minimum Weight (%)", value=0.0, step=1.0, min_value=0.0,
+                                    max_value=100.0, format="%.2f")
+    max_percent = right.number_input("Maximum Weight (%)", value=40.0, step=5.0, min_value=0.0,
+                                     max_value=100.0, format="%.2f")
+    first, second, third = st.columns(3)
+    risk_aversion = first.number_input("Risk Aversion", value=1.0, step=0.5, min_value=0.0)
+    cvar_weight = second.number_input("CVaR Weight", value=1.0, step=0.5, min_value=0.0)
+    return_weight = third.number_input("Return Weight", value=1.0, step=0.5, min_value=0.0)
+    enabled = st.checkbox("Enable Liquidity Constraint", value=False)
+    limit = None
+    if enabled:
+        limit = st.number_input("Maximum Position / ADTV", value=10.0, step=1.0, min_value=0.01,
+                                format="%.2f")
+        st.caption(f"Each position is limited to {limit:g} × its average daily traded value: "
+                   f"about {limit / (participation / 100):,.0f} trading days to exit at the "
+                   f"{participation:g}% participation rate set in Liquidity Analysis.")
+    st.caption(f"Uses the inputs above: Portfolio Value Rs. {portfolio_value:,.2f}, "
+               f"{confidence:g}% confidence, at least {minimum} common observations and "
+               f"{periods} periods per year.")
+
+    result, error = optimize(data, universe, min_percent, max_percent, risk_aversion,
+                             cvar_weight, return_weight, confidence, minimum, periods,
+                             portfolio_value, enabled, limit)
+    if error:
+        st.error(error)
+        return
+    if result.liquidity_unconstrained_symbols:
+        st.warning("No liquidity data, so the liquidity constraint is not applied to: "
+                   f"{', '.join(result.liquidity_unconstrained_symbols)}.")
+
+    st.markdown("**Optimized Allocation**")
+    st.table(optimization_allocation_display(result).astype(str))
+    st.table(optimization_metrics_display(result).astype(str))
+
+    st.markdown("**Equal Weight vs ExitSafe Optimized**")
+    st.table(optimization_comparison_display(result).astype(str))
+    st.caption("Both are measured on the same historical scenarios. The equal-weight portfolio "
+               "is a reference only and does not have to meet the weight or liquidity limits.")
+
+    with st.expander("How does the optimization work?"):
+        st.markdown(
+            "- **Optimization chooses portfolio weights that satisfy your constraints while "
+            "balancing expected return, variance risk and tail risk.** It minimizes "
+            "Risk Aversion × variance + CVaR Weight × CVaR − Return Weight × expected return, "
+            "all in daily units. The three weights are model settings, not comparable units.\n"
+            "- **Expected return** is the historical average daily return on the common dates. "
+            "It is an estimate from the past, not a promised return.\n"
+            "- **Variance** uses the covariance matrix (wᵀΣw), so it accounts for how the "
+            "stocks move together.\n"
+            "- **CVaR is included directly in the optimization objective**: it is calculated "
+            "from the portfolio's own daily returns on every historical day (scenario), not "
+            "from the individual stocks' CVaR values.\n"
+            "- **Liquidity constraints prevent a position from becoming too large relative to "
+            "normal trading activity**: position ÷ ADTV must stay at or below the limit. ADTV "
+            "is reported turnover where available, otherwise an estimate (close × volume).\n"
+            "- Weights are long-only (no short selling), fully invested (total 100%) and "
+            "between the minimum and maximum weight. If no allocation can meet every "
+            "constraint, an error explains which constraint cannot be met.\n"
+            "- There are no transaction costs, market impact or rebalancing in this model, and "
+            "the allocation is a quantitative result, not a buy or sell recommendation.")
 
 
 if __name__ == "__main__":

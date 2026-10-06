@@ -15,7 +15,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 7 | CVaR / Expected Shortfall, stock-level 1-day (`app/analytics/cvar.py`) | implemented |
 | 8 | Liquidity, stock-level (`app/analytics/liquidity.py`) | implemented |
 | 9 | Portfolio risk, fixed user weights (`app/analytics/portfolio_risk.py`) | implemented |
-| 10–13 | Optimization, regime, stress testing, backtesting | not implemented |
+| 10 | Risk-aware portfolio optimization (`app/portfolio/optimizer.py`) | implemented |
+| 11–13 | Market regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -807,6 +808,219 @@ calculate_portfolio_risk_summary(data, weights, portfolio_value=20_000_000,
    not a liquidation plan and gives no portfolio liquidation time.
 6. **Short data is unstable:** with few common dates, every figure, and
    especially VaR, CVaR and the annualized returns, can change a lot.
-7. **No optimization:** no weights are suggested or optimized.
+7. **No optimization:** this module suggests or optimizes no weights (see section 10).
 8. **No stress testing.**
 9. **No backtesting.**
+
+## 10. Risk-aware portfolio optimization
+
+The optimizer **chooses** weights for a universe of stocks that the user
+selects. Portfolio Risk (section 9) only measures weights the user supplies.
+**This optimizer is a historical quantitative allocation model, not a guarantee
+of future returns.** It produces numbers, not buy or sell instructions.
+
+```python
+from app.portfolio.optimizer import optimize_portfolio, equal_weight_portfolio
+
+result = optimize_portfolio(data, ["ABC", "LMN", "XYZ"],
+                            risk_aversion=1.0, cvar_weight=1.0, return_weight=1.0,
+                            confidence_level=0.95, min_observations=20, periods_per_year=252,
+                            min_weight=0.0, max_weight=0.40,
+                            portfolio_value=20_000_000,
+                            liquidity_constraint_enabled=True, max_position_to_adtv=10)
+result.optimized_weights          # {symbol: weight}
+result.equal_weight_metrics       # baseline on the same scenarios
+```
+
+**Universe**
+- **Symbol rules:** every selected symbol must exist in the data, and symbols
+  must be unique.
+- **Never dropped silently:** a missing or duplicate symbol raises a clear
+  error instead of being removed.
+- **Data:** only the selected stocks' data is used, and the input is never
+  modified.
+
+**Historical scenarios**
+- **Source:** the date × symbol daily-return matrix comes from
+  `calculate_aligned_return_matrix` (section 3) on the universe. No return is
+  recalculated.
+- **What makes a scenario:** a date is a scenario only if every selected stock
+  has a usable return on it covering the **same period**.
+- **Data rules:**
+  - INVALID rows never create bridged returns
+  - WARNING rows count
+  - nothing is filled with zero
+- **Equal weighting:** each of the N scenarios has weight 1/N.
+- **Insufficient data:** fewer than `min_observations` scenarios (default 20)
+  raises `InsufficientObservationsError`. The error states the count and why
+  dates were excluded.
+
+**Expected return.** μ_i is the **arithmetic mean daily return of stock i over
+the scenario dates**. The expected annual return is μ_i × `periods_per_year`.
+- It is a **historical sample estimate, not a guaranteed or forecast future
+  return.**
+- The geometric return is not used, which keeps the objective linear and convex.
+
+**Variance.** Σ is the daily sample covariance matrix from
+`calculate_covariance_matrix` (ddof = 1), on the same dates. Portfolio variance
+is **wᵀΣw**, never a weighted average of stock volatilities.
+
+**CVaR in the optimization** (Rockafellar–Uryasev linear form for equally
+weighted historical scenarios). For each scenario t with return vector r_t, at
+confidence C (α = 1 − C):
+
+```
+loss_t = −r_tᵀ w
+u_t ≥ loss_t − z,   u_t ≥ 0           (z: auxiliary VaR threshold, u_t: excess loss)
+CVaR   = z + (1 / (α N)) Σ_t u_t
+```
+
+- **It is the portfolio's own expected shortfall.** At the optimum this equals
+  the historical expected shortfall of the portfolio's own scenario returns,
+  with the same fractional-tail definition as section 7.
+- **No stock CVaRs are combined.** The CVaR is the portfolio's, calculated from
+  its scenarios.
+- **Confidence:** the default is 0.95, and any 0 < C < 1 is allowed (95% and 99%
+  are tested).
+- **Small samples:** with N = 25, 99% puts only a quarter of one scenario in the
+  tail, so the result is just the worst day.
+
+**Objective** (minimized; every term in **daily** return units, so they share
+one scale)
+
+```
+risk_aversion × wᵀΣw  +  cvar_weight × CVaR(w)  −  return_weight × μᵀw
+```
+
+| Coefficient | Default | Effect of raising it |
+|---|---|---|
+| `risk_aversion` | 1.0 | penalizes variance more |
+| `cvar_weight` | 1.0 | penalizes tail losses more |
+| `return_weight` | 1.0 | rewards historical mean return more |
+
+- **Rules:** the coefficients must be finite and ≥ 0, and at least one must be
+  positive. They are never normalized.
+- **They are model parameters, not comparable units.** Daily variance is about
+  1e-4, daily CVaR about 1e-2 and the daily mean about 1e-3.
+  - With all three at 1, CVaR usually dominates.
+  - Variance matters only with a large `risk_aversion` (tens to hundreds).
+- **Changing `cvar_weight`** moves the allocation away from stocks with bad
+  tails. A higher weight can never raise the optimal portfolio's CVaR, a
+  property the tests check.
+
+**Constraints**
+
+| Constraint | Form |
+|---|---|
+| Fully invested, no leverage | Σ w_i = 1 |
+| Long-only, minimum weight | w_i ≥ `min_weight` (≥ 0; no short selling) |
+| Maximum weight (first concentration control) | w_i ≤ `max_weight` (≤ 1) |
+| Liquidity (optional) | V × w_i ≤ `max_position_to_adtv` × ADTV_i |
+
+- **Bounds:** `0 ≤ min_weight ≤ max_weight ≤ 1`.
+- **Infeasible bounds are rejected before solving:**
+  - n × `min_weight` > 1
+  - n × `max_weight` < 1
+- **No HHI limit:** HHI = Σ w² is reported only, with no threshold.
+
+**Liquidity constraint**
+- **Turning it on:** set `liquidity_constraint_enabled=True`. It needs a
+  positive `portfolio_value` V and a positive `max_position_to_adtv` k.
+  - When the flag is False, no liquidity constraint is applied. The holdings
+    table is still filled whenever V is given, with status `NOT_APPLIED`.
+- **The constraint:** position / ADTV ≤ k for every stock. This is linear in w
+  for a fixed V and ADTV.
+  - It is passed to the solver as w_i ≤ k × ADTV_i / V, the same constraint
+    scaled to weight units.
+- **Where ADTV comes from:** the stock-level liquidity module (section 8), over
+  each stock's usable rows.
+  - Reported turnover is used when every usable day has it.
+  - Otherwise ADTV is the **estimate** close × volume, labelled
+    `ESTIMATED_TRADED_VALUE`. That estimate is never called official turnover.
+- **Rules for missing or zero liquidity data:**
+  - A stock with ADTV = 0 (no trading) is forced to w = 0. With a positive
+    `min_weight` that is infeasible.
+  - A stock with **no usable liquidity data** (no volume) is **not constrained**.
+    It is reported as `NO_LIQUIDITY_DATA` and listed in
+    `liquidity_unconstrained_symbols`, and the UI shows a warning.
+- **Infeasible limits:**
+  - If the limits leave less than 100% of total capacity, or a stock cannot
+    reach `min_weight`, an `InfeasibleConstraintsError` says so before solving.
+  - The fix is to raise k, lower V or add more liquid stocks.
+- **Per-stock status:** `AT_LIMIT` (binding), `WITHIN_LIMIT`,
+  `NO_LIQUIDITY_DATA` or `NOT_APPLIED`.
+- **Link to participation:** at participation rate p, a position at the limit
+  needs about k / p trading days to exit. For example, k = 10 at 10% is about
+  100 days.
+
+**Solver, status and validation**
+- **Solver:** CVXPY with **CLARABEL**, an interior-point solver that ships with
+  CVXPY. It is deterministic, and the same input gives the same weights.
+  - Tolerances are 1e-10.
+  - The objective is multiplied internally by a positive constant so its terms
+    are about 1. This improves solver precision and cannot change the optimal
+    weights. `objective_value` is reported in the original units.
+- **Only an `optimal` status is accepted:**
+  - infeasible statuses raise `InfeasibleConstraintsError`
+  - unbounded, inaccurate or failed solves raise `OptimizationError`
+  - no allocation is ever reported from a failed solve
+- **After solving, the result is rejected unless:**
+  - every weight is finite
+  - every weight is within [`min_weight`, `max_weight`] and its liquidity cap
+    (tolerance 1e-6)
+  - the weights sum to 1 (tolerance 1e-6)
+  - the objective is finite and equals the objective recomputed from the
+    weights. That recomputation uses wᵀΣw, the scenario expected shortfall and
+    μᵀw.
+- **No rescaling:** solver noise within the tolerance (for example −1e-10) is
+  clipped to the bounds. Weights are never rescaled.
+
+**Result** (`OptimizationResult`, no raw CVXPY objects)
+- **Allocation:** `optimized_weights`.
+- **Metrics:** `expected_annual_return`, `daily_volatility`,
+  `annualized_volatility`, `historical_var` (linear quantile, as section 6),
+  `historical_cvar`, `hhi` and `max_weight`.
+- **Objective:** `objective_value` and its `variance_term`, `cvar_term` and
+  `return_term`.
+- **Solver and data:** `solver`, `solver_status`, `observations`, the date range
+  and the excluded-date counts.
+- **Liquidity:** the `liquidity` table when V is given.
+- **Baseline:** `equal_weight_metrics` (`equal_weight_portfolio`: 1/n each),
+  measured on the **same scenarios**, so the comparison is like for like. The
+  baseline does not have to meet the weight or liquidity limits.
+- **No verdict:** no claim is made that either allocation is better.
+
+**Example** (three-stock sample, 24 common days, all coefficients 1, maximum
+weight 100%, no liquidity constraint)
+
+| Metric | Equal Weight | Optimized (ABC 63.53%, LMN 5.83%, XYZ 30.64%) |
+|---|---|---|
+| Annualized return (arithmetic) | −133.84% | −51.95% |
+| Annualized volatility | 25.25% | 20.36% |
+| Historical VaR (1-day) | 3.07% | 1.68% |
+| Historical CVaR (1-day) | 3.20% | 1.68% |
+| HHI | 0.3333 | 0.5009 |
+
+All returns are negative because the 24-day sample is a falling market. A short
+sample like this is exactly where historical estimates are least reliable.
+
+**Limitations:**
+1. **Historical estimates:** expected returns come from the past. They are not
+   forecasts, and there is no guarantee of future returns.
+2. **Unstable on short history:** with little data, small changes in the data
+   can change the allocation a lot.
+3. **Noisy covariance:** sample covariance is noisy, especially with many
+   stocks and few days, and no shrinkage is applied.
+4. **Scenario-dependent CVaR:** historical CVaR depends entirely on the
+   available scenarios. At 99% with few days it is essentially the single worst
+   day.
+5. **No transaction costs.**
+6. **No market impact:** the liquidity constraint limits size relative to ADTV,
+   but it is not an impact model.
+7. **No turnover penalty.**
+8. **No rebalancing model:** this is a single-period allocation, with no
+   dynamic or multi-period optimization.
+9. **No sector constraints:** there is no reliable sector data yet.
+10. **No short selling.**
+11. **No leverage.**
+12. **No guarantee of future results.**
