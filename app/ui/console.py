@@ -27,6 +27,7 @@ from app.analytics.liquidity import (
     calculate_liquidity_summary,
     calculate_position_liquidity,
 )
+from app.analytics.portfolio_risk import calculate_portfolio_risk_summary
 from app.analytics.ratios import calculate_risk_adjusted_ratios
 from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
@@ -357,3 +358,110 @@ def position_display(positions):
 def uses_estimated_traded_value(summary):
     """True if any symbol's traded value is estimated from close × volume."""
     return bool((summary["traded_value_source"] == ESTIMATED_TRADED_VALUE).any())
+
+
+WEIGHT_PERCENT_TOLERANCE = 1e-4      # = WEIGHT_SUM_TOLERANCE (1e-6) expressed in percent
+
+
+def default_holdings_text(symbols):
+    """Equal weights in percent, one "SYMBOL, weight" line each; the last line takes the
+    rounding remainder so the total is exactly 100. A starting point to edit."""
+    symbols = sorted(symbols)
+    if not symbols:
+        return ""
+    share = math.floor(10000 / len(symbols)) / 100
+    weights = [share] * (len(symbols) - 1) + [round(100 - share * (len(symbols) - 1), 2)]
+    return "\n".join(f"{s}, {w:.2f}" for s, w in zip(symbols, weights))
+
+
+def parse_holdings(text):
+    """(list of (symbol, weight as a fraction), error message) from "SYMBOL, weight %" lines.
+
+    Separators: comma, tab or spaces; a trailing % is allowed; blank lines are ignored.
+    The weights must total 100% — they are never rescaled. Duplicates, negatives and
+    unknown symbols are reported by the analytics layer.
+    """
+    pairs = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        parts = line.replace(",", " ").replace("\t", " ").replace("%", " ").split()
+        if len(parts) != 2:
+            return None, f"Line {number}: enter one holding per line as 'SYMBOL, weight %'."
+        symbol, weight_text = parts
+        try:
+            weight = float(weight_text.rstrip("%"))
+        except ValueError:
+            return None, f"Line {number}: '{weight_text}' is not a number."
+        if not math.isfinite(weight):
+            return None, f"Line {number}: the weight for {symbol} must be a finite number."
+        pairs.append((symbol, weight / 100))
+    if not pairs:
+        return None, "Enter at least one holding."
+    total = sum(w for _, w in pairs) * 100
+    if abs(total - 100) > WEIGHT_PERCENT_TOLERANCE:
+        return None, (f"Weights total {total:,.4g}%; they must total 100%. They are not "
+                      "adjusted automatically.")
+    return pairs, None
+
+
+def portfolio_risk(data, holdings, portfolio_value, confidence_percent, min_observations,
+                   periods_per_year, participation_percent):
+    """(PortfolioRiskResult, error message). Percent inputs are entered as 95.0 = 95%."""
+    try:
+        return calculate_portfolio_risk_summary(
+            data, holdings, portfolio_value=float(portfolio_value),
+            confidence_level=confidence_percent / 100, min_observations=int(min_observations),
+            periods_per_year=periods_per_year,
+            participation_rate=participation_percent / 100), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def portfolio_summary_display(result):
+    """A new, display-only Metric / Value table of the portfolio risk summary."""
+    def day(value):
+        return "n/a" if value is None or pd.isna(value) else str(pd.Timestamp(value).date())
+
+    recovery = (day(result.recovery_date) if not pd.isna(result.recovery_date) else
+                "not recovered" if not pd.isna(result.trough_date) else "n/a")
+    rows = [
+        ("Common observations", f"{result.observations} ({day(result.start_date)} to "
+                                f"{day(result.end_date)})"),
+        ("Cumulative Return", format_percent(result.cumulative_return)),
+        ("Annualized Return (arithmetic)", format_percent(result.annualized_arithmetic_return)),
+        ("Annualized Return (geometric)", format_percent(result.annualized_geometric_return)),
+        ("Annualized Volatility", format_percent(result.annualized_volatility)),
+        ("Maximum Drawdown", format_percent(result.maximum_drawdown)),
+        ("Drawdown Peak / Trough / Recovery",
+         f"{day(result.peak_date)} / {day(result.trough_date)} / {recovery}"),
+        ("Historical VaR (1-day)", format_percent(result.historical_var)),
+        ("Parametric VaR (1-day)", format_percent(result.parametric_var)),
+        ("Historical CVaR (1-day)", format_percent(result.historical_cvar)),
+        ("Parametric CVaR (1-day)", format_percent(result.parametric_cvar)),
+        ("Maximum Weight", format_percent(result.maximum_weight)),
+        ("HHI (concentration)", f"{result.hhi:.4f}"),
+    ]
+    if result.portfolio_value is not None:
+        rows += [
+            ("Most Illiquid Holding", result.most_illiquid_symbol or "n/a"),
+            ("Maximum Estimated Liquidation Days",
+             _amount(result.maximum_estimated_liquidation_days)),
+            ("Maximum Position / ADTV", _amount(result.maximum_position_to_adtv, 3)),
+        ]
+    return pd.DataFrame(rows, columns=["Metric", "Value"])
+
+
+def portfolio_holdings_display(result):
+    """A new, display-only holdings / liquidity table."""
+    holdings = result.holdings
+    return pd.DataFrame({
+        "Symbol": holdings["symbol"],
+        "Weight": [format_percent(w) for w in holdings["weight"]],
+        "Position Value (Rs.)": [_amount(v) for v in holdings["position_value"]],
+        "ADTV (Rs.)": [_amount(v) for v in holdings["average_daily_traded_value"]],
+        "ADTV Source": [TRADED_VALUE_SOURCE_LABELS.get(s, s)
+                        for s in holdings["traded_value_source"]],
+        "Position / ADTV": [_amount(v, 3) for v in holdings["position_to_adtv"]],
+        "Estimated Liquidation Days": [_amount(v) for v in holdings["estimated_liquidation_days"]],
+    })

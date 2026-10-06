@@ -53,8 +53,15 @@ def calculate_maximum_drawdown(data):
     recovery_date (NaT if not recovered or if there was no decline).
     """
     series = calculate_drawdown_series(data)
-    rows = [_maximum_drawdown_event(symbol, group.reset_index(drop=True))
-            for symbol, group in series.groupby("symbol", sort=True)]
+    rows = []
+    for symbol, group in series.groupby("symbol", sort=True):
+        path = group.rename(columns={"close": "value"}).reset_index(drop=True)
+        event = maximum_drawdown_event(path)
+        rows.append({"symbol": symbol, "observations": event["observations"],
+                     "maximum_drawdown": event["maximum_drawdown"],
+                     "peak_date": event["peak_date"], "peak_price": event["peak_value"],
+                     "trough_date": event["trough_date"], "trough_price": event["trough_value"],
+                     "recovery_date": event["recovery_date"]})
     summary = pd.DataFrame(rows, columns=SUMMARY_COLUMNS)
     for column in ("peak_date", "trough_date", "recovery_date"):
         summary[column] = pd.to_datetime(summary[column])
@@ -64,25 +71,42 @@ def calculate_maximum_drawdown(data):
     return summary
 
 
-def _maximum_drawdown_event(symbol, group):
-    row = {"symbol": symbol, "observations": len(group), "maximum_drawdown": np.nan,
-           "peak_date": pd.NaT, "peak_price": np.nan, "trough_date": pd.NaT,
-           "trough_price": np.nan, "recovery_date": pd.NaT}
-    if len(group) < 2:
-        return row
+def drawdown_path(dates, values):
+    """Chronological path of one value series: date, value, running_peak, drawdown.
 
-    trough = int(group["drawdown"].idxmin())            # earliest minimum
-    row["maximum_drawdown"] = group.loc[trough, "drawdown"]
-    if row["maximum_drawdown"] >= 0:
-        return row                                       # no decline: no event
+    ``values`` are prices or any value index (e.g. a portfolio value starting at 1.0).
+    """
+    path = pd.DataFrame({"date": list(dates), "value": np.asarray(values, dtype="float64")})
+    path["running_peak"] = path["value"].cummax()
+    path["drawdown"] = path["value"] / path["running_peak"] - 1
+    return path
 
-    peak_price = group.loc[trough, "running_peak"]
-    peak = int(group.index[(group.index <= trough) & (group["close"] == peak_price)].max())
-    recovered = group.index[(group.index > trough) & (group["close"] >= peak_price)]
-    row.update(peak_date=group.loc[peak, "date"], peak_price=peak_price,
-               trough_date=group.loc[trough, "date"], trough_price=group.loc[trough, "close"],
-               recovery_date=group.loc[recovered.min(), "date"] if len(recovered) else pd.NaT)
-    return row
+
+def maximum_drawdown_event(path):
+    """The maximum drawdown event of a path (columns date, value, running_peak, drawdown,
+    in date order, index 0..n-1), using the rules in the module docstring.
+
+    Returns a dict: observations, maximum_drawdown, peak_date, peak_value,
+    trough_date, trough_value, recovery_date.
+    """
+    event = {"observations": len(path), "maximum_drawdown": np.nan, "peak_date": pd.NaT,
+             "peak_value": np.nan, "trough_date": pd.NaT, "trough_value": np.nan,
+             "recovery_date": pd.NaT}
+    if len(path) < 2:
+        return event
+
+    trough = int(path["drawdown"].idxmin())             # earliest minimum
+    event["maximum_drawdown"] = path.loc[trough, "drawdown"]
+    if event["maximum_drawdown"] >= 0:
+        return event                                     # no decline: no event
+
+    peak_value = path.loc[trough, "running_peak"]
+    peak = int(path.index[(path.index <= trough) & (path["value"] == peak_value)].max())
+    recovered = path.index[(path.index > trough) & (path["value"] >= peak_value)]
+    event.update(peak_date=path.loc[peak, "date"], peak_value=peak_value,
+                 trough_date=path.loc[trough, "date"], trough_value=path.loc[trough, "value"],
+                 recovery_date=path.loc[recovered.min(), "date"] if len(recovered) else pd.NaT)
+    return event
 
 
 def _usable_prices(data, purpose):

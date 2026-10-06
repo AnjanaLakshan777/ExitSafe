@@ -309,3 +309,79 @@ def test_position_liquidity_takes_percent_and_reports_errors():
 
     none, error = position_liquidity(data, 20_000_000, 150.0)
     assert none is None and "participation_rate" in error
+
+
+def test_default_holdings_text_totals_exactly_100():
+    from app.ui.console import default_holdings_text, parse_holdings
+
+    text = default_holdings_text(["XYZ", "ABC", "LMN"])
+    assert text.splitlines() == ["ABC, 33.33", "LMN, 33.33", "XYZ, 33.34"]
+    pairs, error = parse_holdings(text)
+    assert error is None and sum(w for _, w in pairs) == pytest.approx(1.0)
+    assert default_holdings_text(["ONE"]) == "ONE, 100.00"
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("ABC, 60\nLMN, 40", [("ABC", 0.6), ("LMN", 0.4)]),
+    ("ABC\t60%\n\n  LMN 40 % ", [("ABC", 0.6), ("LMN", 0.4)]),
+])
+def test_parse_holdings_accepts_percent_lines(text, expected):
+    from app.ui.console import parse_holdings
+
+    pairs, error = parse_holdings(text)
+    assert error is None
+    assert [s for s, _ in pairs] == [s for s, _ in expected]
+    assert [w for _, w in pairs] == pytest.approx([w for _, w in expected])
+
+
+@pytest.mark.parametrize("text, message", [
+    ("ABC, 60\nLMN, 30", "total 90%; they must total 100%"),
+    ("ABC, 0.6\nLMN, 0.4", "total 1%"),                  # fractions are not rescaled
+    ("ABC, sixty", "not a number"),
+    ("ABC, 50, 50", "one holding per line"),
+    ("ABC, nan", "finite"),
+    ("   ", "at least one holding"),
+])
+def test_parse_holdings_reports_errors_without_normalizing(text, message):
+    from app.ui.console import parse_holdings
+
+    pairs, error = parse_holdings(text)
+    assert pairs is None and message in error
+
+
+def test_portfolio_risk_tables_for_three_stock_sample():
+    from app.ui.console import (MULTI_SYMBOL_SAMPLE_CSV, parse_holdings,
+                                portfolio_holdings_display, portfolio_risk,
+                                portfolio_summary_display)
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    holdings, _ = parse_holdings("ABC, 40\nLMN, 25\nXYZ, 35")
+    result, error = portfolio_risk(data, holdings, 20_000_000, 95.0, 20, 252, 10.0)
+    assert error is None
+    assert result.confidence_level == pytest.approx(0.95) and result.participation_rate == pytest.approx(0.10)
+
+    summary = dict(zip(*portfolio_summary_display(result).T.values))
+    assert summary["Annualized Volatility"] == format_percent(result.annualized_volatility)
+    assert summary["Maximum Weight"] == "40.00%"
+    assert summary["HHI (concentration)"] == "0.3450"
+    assert summary["Most Illiquid Holding"] == "LMN"
+    assert not any(word in " ".join(summary.values()).upper() for word in ("BUY", "SELL", "SAFE"))
+
+    table = portfolio_holdings_display(result)
+    assert list(table.columns) == ["Symbol", "Weight", "Position Value (Rs.)", "ADTV (Rs.)",
+                                   "ADTV Source", "Position / ADTV", "Estimated Liquidation Days"]
+    assert list(table["Position Value (Rs.)"]) == ["8,000,000.00", "5,000,000.00", "7,000,000.00"]
+    assert set(table["ADTV Source"]) == {"Actual turnover"}
+
+
+def test_portfolio_risk_reports_analytics_errors():
+    from app.ui.console import portfolio_risk
+
+    data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    result, error = portfolio_risk(data, [("NOPE", 1.0)], 1_000_000, 95.0, 20, 252, 10.0)
+    assert result is None and "not found" in error
+    result, error = portfolio_risk(data, [(SAMPLE_SYMBOL, 0.5), (SAMPLE_SYMBOL, 0.5)],
+                                   1_000_000, 95.0, 20, 252, 10.0)
+    assert result is None and "Duplicate" in error
+    result, error = portfolio_risk(data, [(SAMPLE_SYMBOL, 1.0)], 1_000_000, 95.0, 20, 252, 10.0)
+    assert error is None and not result.sufficient_tail_data and result.observations == 4

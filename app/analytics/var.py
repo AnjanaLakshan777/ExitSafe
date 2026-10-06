@@ -92,14 +92,24 @@ def calculate_var_summary(data, confidence_level=DEFAULT_CONFIDENCE_LEVEL,
             "min_observations": min_observations,
             "sufficient_data": sufficient,
             "confidence_level": confidence_level,
-            "historical_var": (-np.quantile(sample, alpha, method=QUANTILE_METHOD)
-                               if sufficient else np.nan),
-            "parametric_var": (-(sample.mean() + z_alpha * sample.std(ddof=1))
-                               if sufficient else np.nan),
+            "historical_var": historical_var(sample, alpha) if sufficient else np.nan,
+            "parametric_var": parametric_var(sample, alpha, z_alpha) if sufficient else np.nan,
         })
     return pd.DataFrame(rows, columns=SUMMARY_COLUMNS).astype(
         {"observations": "int64", "min_observations": "int64", "sufficient_data": "bool",
          "confidence_level": "float64", "historical_var": "float64", "parametric_var": "float64"})
+
+
+def historical_var(returns, alpha):
+    """Historical VaR (positive loss) of one return sample: -quantile(r, alpha), linear."""
+    return -np.quantile(np.asarray(returns, dtype="float64"), alpha, method=QUANTILE_METHOD)
+
+
+def parametric_var(returns, alpha, z_alpha=None):
+    """Parametric Normal VaR (positive loss) of one return sample: -(mean + z * std)."""
+    sample = np.asarray(returns, dtype="float64")
+    z = norm.ppf(alpha) if z_alpha is None else z_alpha
+    return -(sample.mean() + z * sample.std(ddof=1))
 
 
 def returns_by_symbol(data):

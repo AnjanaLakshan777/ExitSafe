@@ -14,7 +14,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 6 | Value at Risk, stock-level 1-day (`app/analytics/var.py`) | implemented |
 | 7 | CVaR / Expected Shortfall, stock-level 1-day (`app/analytics/cvar.py`) | implemented |
 | 8 | Liquidity, stock-level (`app/analytics/liquidity.py`) | implemented |
-| 9–13 | Portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 9 | Portfolio risk, fixed user weights (`app/analytics/portfolio_risk.py`) | implemented |
+| 10–13 | Optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -672,3 +673,140 @@ metrics are exposed instead.
 8. **No intraday liquidity data** yet: only daily totals.
 9. **Short history:** historical coverage may be short, and a few unusual days
    can move the averages a lot.
+
+## 9. Portfolio risk (fixed weights)
+
+Portfolio risk considers **how the stocks behave together**, not each stock on
+its own. It combines the stock-level analytics above into one view for weights
+that the **user supplies**. Nothing is optimized and no weights are suggested.
+
+```python
+from app.analytics.portfolio_risk import (calculate_portfolio_return_series,
+                                          calculate_portfolio_risk_summary)
+
+weights = {"ABC": 0.40, "LMN": 0.25, "XYZ": 0.35}
+calculate_portfolio_return_series(data, weights)                 # date, portfolio_return
+calculate_portfolio_risk_summary(data, weights, portfolio_value=20_000_000,
+                                 confidence_level=0.95, min_observations=20,
+                                 periods_per_year=252)           # PortfolioRiskResult
+```
+
+**Weights**
+- **Accepted forms:** `{symbol: weight}`, a table with `symbol` and `weight`
+  columns, or `(symbol, weight)` pairs. Weights are **fractions** (0.40 = 40%).
+- **Rules:**
+  - every weight must be a finite number ≥ 0 (no short selling)
+  - symbols must be unique and present in the data
+  - the weights must sum to 1 within **`WEIGHT_SUM_TOLERANCE` = 1e-6**
+- **Errors:** a clear `ValueError` is raised for an empty portfolio, duplicate
+  symbols, NaN/inf, negative weights, a sum ≠ 1 or a missing symbol.
+- **Never normalized:** weights of 60 and 40, or 0.6 and 0.3, are rejected, not
+  rescaled.
+- **Zero weights** are allowed. The holding is listed, but it does not restrict
+  the common dates.
+
+**Return alignment** (`calculate_aligned_return_matrix`, section 3)
+- **Who takes part:** only the portfolio's symbols with weight > 0.
+- **Which dates count:** a date is used only if **every** such holding has a
+  usable daily return on it **covering the same period** (the same previous
+  date).
+- **Dates that are left out:**
+  - a date where any holding has no return (`excluded_missing`)
+  - a date where a holding's return spans a gap (`excluded_misaligned`)
+- **Data rules:**
+  - INVALID rows give no return and are never bridged
+  - WARNING rows count
+  - missing returns are **never filled with zero**
+
+**Formulas** (w = weights, R_i(t) = daily return of holding i, P =
+`periods_per_year`, default 252, n = common observations)
+
+| Measure | Formula |
+|---|---|
+| Portfolio return | R_p(t) = Σ_i w_i R_i(t) |
+| Cumulative return | Π(1 + R_p) − 1 |
+| Annualized arithmetic return | mean(R_p) × P |
+| Annualized geometric return | (1 + cumulative)^(P / n) − 1 (labelled; extrapolates a lot on short data) |
+| Daily variance | **wᵀ Σ w**, Σ = daily sample covariance matrix (ddof = 1) on the common dates |
+| Daily / annualized volatility | √(wᵀ Σ w) / √(wᵀ Σ w × P) |
+| Value path | V(base) = 1.0, V(t) = V(t−1) × (1 + R_p(t)) |
+| Maximum drawdown | on the value path, with the same peak/trough/recovery rules as section 4 |
+| Historical / parametric VaR | section 6, applied to the R_p series |
+| Historical / parametric CVaR | section 7, applied to the R_p series |
+| Maximum weight | max(w_i) |
+| HHI | Σ w_i² (1/N for N equal weights, 1 for a single stock) |
+
+**Why these formulas and not averages**
+- **Volatility:** portfolio volatility is **not** the weighted average of stock
+  volatilities. Correlation matters.
+  - It equals the weighted average only when the stocks are perfectly
+    correlated.
+  - Otherwise it is lower.
+  - Two perfectly negatively correlated stocks of equal volatility, held 50/50,
+    have zero volatility.
+- **VaR and CVaR** come from the portfolio's **own** return series, not from
+  weighted stock VaR or CVaR.
+- **Drawdown** comes from the portfolio value path, not from averaging stock
+  drawdowns.
+- **The base date** is the close before the first common return, so a decline
+  on the first day is measured from 1.0.
+
+**Insufficient data**
+- **Fewer than 2 common observations:** every statistic is NaN.
+- **Fewer than `min_observations`** (default 20): VaR and CVaR are NaN, and
+  `sufficient_tail_data` is False.
+- **The count is always reported** in `observations`.
+
+**Holdings liquidity** (only when `portfolio_value` is given)
+- **Position value:** position_i = portfolio_value × w_i.
+- **Each holding** goes through the stock-level `calculate_position_liquidity`
+  (section 8) at `participation_rate` (default 0.10).
+- **Holdings table columns:**
+  - `symbol`, `weight`, `position_value`
+  - `average_daily_traded_value`, `traded_value_source`
+  - `position_to_adtv`, `daily_executable_value`, `estimated_liquidation_days`
+- **No portfolio liquidation days.** Liquidation days are **not added up**,
+  because sales of different stocks can happen on the same days.
+- **Only descriptive figures are reported:**
+  - `most_illiquid_symbol`
+  - `maximum_estimated_liquidation_days`
+  - `maximum_position_to_adtv`
+  - `undefined_liquidation_symbols` (holdings whose ADTV is 0 or unavailable)
+- **A zero-weight holding** has 0 days to liquidate (NaN if its ADTV is
+  unavailable).
+- **No score or classification:** there are no concentration or liquidity
+  thresholds, and no SAFE / AT RISK / BUY / SELL labels.
+
+**Worked example** (60% A, 40% B, three common days)
+
+| | Day 1 | Day 2 | Day 3 |
+|---|---|---|---|
+| A return | +2% | −1% | +3% |
+| B return | −1% | +2% | 0% |
+| R_p = 0.6 A + 0.4 B | **0.8%** | **0.2%** | **1.8%** |
+| Value path (from 1.0) | 1.008 | 1.010016 | 1.028196 |
+
+| Result | Calculation | Value |
+|---|---|---|
+| Var(A), Var(B), Cov(A, B) | sample (÷ 2) | 0.00043333, 0.00023333, −0.00026667 (correlation −0.84) |
+| wᵀ Σ w | 0.36 × 0.00043333 + 0.16 × 0.00023333 + 2 × 0.24 × (−0.00026667) | **0.00006533** |
+| Daily volatility | √0.00006533 | **0.808%** (= sample std of R_p) |
+| Weighted average of stock volatilities | 0.6 × 2.082% + 0.4 × 1.528% | 1.860%, which is **not** the portfolio volatility |
+| Annualized volatility | √(0.00006533 × 252) | **12.83%** |
+| Cumulative return | 1.008 × 1.002 × 1.018 − 1 | **2.82%** |
+| HHI | 0.6² + 0.4² | **0.52** |
+
+**Limitations:**
+1. **Fixed weights:** the weights are held constant over the whole period.
+2. **No rebalancing model:** R_p = Σ w_i R_i implicitly restores the weights
+   every day, at no cost. Weight drift between rebalances, rebalancing
+   schedules and the trades they need are not modelled.
+3. **No transaction costs.**
+4. **No market impact:** selling a large position may move the price.
+5. **Descriptive liquidity:** the liquidity summary is descriptive only. It is
+   not a liquidation plan and gives no portfolio liquidation time.
+6. **Short data is unstable:** with few common dates, every figure, and
+   especially VaR, CVaR and the annualized returns, can change a lot.
+7. **No optimization:** no weights are suggested or optimized.
+8. **No stress testing.**
+9. **No backtesting.**

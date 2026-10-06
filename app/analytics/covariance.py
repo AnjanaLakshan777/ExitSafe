@@ -66,6 +66,7 @@ def describe_return_alignment(data):
       excluded_missing     candidate dates left out because a symbol had no return
       excluded_misaligned  candidate dates left out because returns covered
                            different periods (different previous dates)
+      base_date            date the first common return starts from (None if none)
     """
     return _alignment(data, "a return alignment")[2]
 
@@ -140,6 +141,8 @@ def _alignment(data, purpose):
         "candidate_dates": len(matrix),
         "excluded_missing": int((~complete).sum()),
         "excluded_misaligned": int((complete & ~same_period).sum()),
+        # the date the first common return starts from (its previous close)
+        "base_date": (pd.Timestamp(previous[common].iloc[0, 0]) if len(aligned) else None),
     }
     return matrix, aligned, info
 
