@@ -28,6 +28,8 @@ from app.ui.console import (  # noqa: E402
     UPLOAD_TYPES,
     alignment_summary,
     canonical_column_order,
+    conditional_value_at_risk,
+    cvar_display,
     drawdown_chart_data,
     format_percent,
     import_summary,
@@ -105,7 +107,8 @@ def main():
     show_covariance(outcome)
     show_drawdown(outcome)
     show_ratios(outcome)
-    show_var(outcome)
+    confidence, minimum = show_var(outcome)
+    show_cvar(outcome, confidence, minimum)
 
 
 def show_import(result):
@@ -286,7 +289,7 @@ def show_var(outcome):
     summary, error = value_at_risk(outcome.import_result.data, confidence, minimum)
     if error:
         st.error(error)
-        return
+        return confidence, minimum
     for row in summary[~summary["sufficient_data"]].itertuples():
         st.warning(f"Insufficient historical observations for reliable VaR — **{row.symbol}**: "
                    f"Observations: {row.observations}, Minimum required: {row.min_observations}. "
@@ -309,6 +312,39 @@ def show_var(outcome):
             "- A small sample says little about rare events, so VaR is shown only when a stock "
             "has at least the minimum number of daily returns. INVALID rows never enter the "
             "returns.")
+    return confidence, minimum
+
+
+def show_cvar(outcome, confidence, minimum):
+    st.divider()
+    st.subheader("Conditional Value at Risk (CVaR)")
+    st.caption(f"CVaR / Expected Shortfall — 1-day, per stock, at {confidence:g}% confidence "
+               f"and at least {minimum} observations (the VaR inputs above).")
+
+    summary, error = conditional_value_at_risk(outcome.import_result.data, confidence, minimum)
+    if error:
+        st.error(error)
+        return
+    for row in summary[~summary["sufficient_data"]].itertuples():
+        st.warning(f"Insufficient historical observations for reliable VaR/CVaR — **{row.symbol}**: "
+                   f"Observations: {row.observations}, Minimum required: {row.min_observations}. "
+                   "VaR: n/a, CVaR: n/a")
+    st.table(cvar_display(summary).astype(str))
+
+    with st.expander("What does CVaR mean?"):
+        st.markdown(
+            "- **CVaR** (also called **Expected Shortfall**) estimates the average loss in the "
+            "tail beyond the VaR confidence threshold.\n"
+            "- **VaR tells us where the tail begins. CVaR tells us how severe the tail is on "
+            "average.** It is not the maximum possible loss.\n"
+            "- **Historical CVaR** averages the worst (100 − confidence)% of the observed daily "
+            "returns. *Tail observations* shows how many that is; a fraction such as 1.5 means "
+            "the worst day counts fully and the next worst counts half.\n"
+            "- **Parametric CVaR** uses the same normal-distribution assumption as parametric "
+            "VaR: −(mean − standard deviation × pdf(z) / α).\n"
+            "- Both use exactly the same daily returns as VaR, are shown as positive losses, "
+            "and are usually at least as large as VaR. They describe the past data or model, "
+            "not a prediction.")
 
 
 if __name__ == "__main__":

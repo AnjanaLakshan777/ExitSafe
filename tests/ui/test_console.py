@@ -258,3 +258,28 @@ def test_invalid_var_inputs_return_a_message():
     data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
     summary, error = value_at_risk(data, 100.0, 20)
     assert summary is None and "confidence_level" in error
+
+
+def test_conditional_value_at_risk_uses_var_inputs_and_flags_small_samples():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, conditional_value_at_risk, cvar_display
+
+    three = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    summary, error = conditional_value_at_risk(three, 95.0, 20)
+    assert error is None and summary["sufficient_data"].all()
+    assert (summary["historical_cvar"] >= summary["historical_var"]).all()
+    shown = cvar_display(summary)
+    assert list(shown.columns) == ["Symbol", "Observations", "Tail observations", "Historical VaR",
+                                   "Historical CVaR", "Parametric VaR", "Parametric CVaR"]
+    assert list(shown["Tail observations"]) == ["1.2"] * 3
+
+    one = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    small, _ = conditional_value_at_risk(one, 95.0, 20)
+    assert list(cvar_display(small)["Historical CVaR"]) == ["n/a"]
+
+
+def test_invalid_cvar_inputs_return_a_message():
+    from app.ui.console import conditional_value_at_risk
+
+    data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    summary, error = conditional_value_at_risk(data, 95.0, 1)
+    assert summary is None and "min_observations" in error

@@ -20,6 +20,7 @@ from app.analytics.covariance import (
     describe_return_alignment,
 )
 from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
+from app.analytics.cvar import calculate_cvar_summary
 from app.analytics.ratios import calculate_risk_adjusted_ratios
 from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
@@ -271,4 +272,26 @@ def var_display(summary):
         "Confidence": [f"{c * 100:g}%" for c in summary["confidence_level"]],
         "Historical VaR": [format_percent(v) for v in summary["historical_var"]],
         "Parametric VaR": [format_percent(v) for v in summary["parametric_var"]],
+    })
+
+
+def conditional_value_at_risk(data, confidence_percent, min_observations):
+    """(CVaR summary incl. VaR, error message). Confidence is entered in percent."""
+    try:
+        return calculate_cvar_summary(data, confidence_level=confidence_percent / 100,
+                                      min_observations=int(min_observations)), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def cvar_display(summary):
+    """A new, display-only VaR/CVaR table (losses as positive percentages)."""
+    return pd.DataFrame({
+        "Symbol": summary["symbol"],
+        "Observations": summary["observations"],
+        "Tail observations": [f"{m:g}" for m in summary["tail_mass"]],
+        "Historical VaR": [format_percent(v) for v in summary["historical_var"]],
+        "Historical CVaR": [format_percent(v) for v in summary["historical_cvar"]],
+        "Parametric VaR": [format_percent(v) for v in summary["parametric_var"]],
+        "Parametric CVaR": [format_percent(v) for v in summary["parametric_cvar"]],
     })

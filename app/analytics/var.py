@@ -83,14 +83,8 @@ def calculate_var_summary(data, confidence_level=DEFAULT_CONFIDENCE_LEVEL,
     alpha = 1 - confidence_level
     z_alpha = norm.ppf(alpha)
 
-    returns = calculate_daily_returns(data)
-    symbols = sorted(returns["symbol"].dropna().unique())
-    usable = returns[np.isfinite(returns[CANONICAL_DAILY_RETURN])]
-    by_symbol = {s: g[CANONICAL_DAILY_RETURN].to_numpy() for s, g in usable.groupby("symbol")}
-
     rows = []
-    for symbol in symbols:
-        sample = by_symbol.get(symbol, np.array([]))
+    for symbol, sample in returns_by_symbol(data).items():
         sufficient = len(sample) >= min_observations
         rows.append({
             "symbol": symbol,
@@ -106,6 +100,18 @@ def calculate_var_summary(data, confidence_level=DEFAULT_CONFIDENCE_LEVEL,
     return pd.DataFrame(rows, columns=SUMMARY_COLUMNS).astype(
         {"observations": "int64", "min_observations": "int64", "sufficient_data": "bool",
          "confidence_level": "float64", "historical_var": "float64", "parametric_var": "float64"})
+
+
+def returns_by_symbol(data):
+    """{symbol: array of usable daily returns}, every input symbol included (sorted).
+
+    The single source of the return sample for VaR and CVaR, so both always use
+    exactly the same observations: finite returns from calculate_daily_returns.
+    """
+    returns = calculate_daily_returns(data)
+    usable = returns[np.isfinite(returns[CANONICAL_DAILY_RETURN])]
+    by_symbol = {s: g[CANONICAL_DAILY_RETURN].to_numpy() for s, g in usable.groupby("symbol")}
+    return {s: by_symbol.get(s, np.array([])) for s in sorted(returns["symbol"].dropna().unique())}
 
 
 def calculate_historical_var(data, confidence_level=DEFAULT_CONFIDENCE_LEVEL,

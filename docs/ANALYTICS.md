@@ -12,7 +12,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 4 | Maximum drawdown (`app/analytics/drawdown.py`) | implemented |
 | 5 | Sharpe / Sortino ratios (`app/analytics/ratios.py`) | implemented |
 | 6 | Value at Risk, stock-level 1-day (`app/analytics/var.py`) | implemented |
-| 7–13 | CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 7 | CVaR / Expected Shortfall, stock-level 1-day (`app/analytics/cvar.py`) | implemented |
+| 8–13 | Liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -443,3 +444,116 @@ days**, so it shows how bad the tail is beyond the threshold.
 | Mean / sample std | −0.00315 / 0.0218253 | same |
 | z_α | −1.6448536 | −2.3263479 |
 | **Parametric VaR** = −(−0.00315 + z × 0.0218253) | **3.9049%** | **5.3923%** |
+
+## 7. CVaR / Expected Shortfall
+
+**Conditional Value at Risk (CVaR)**, also called **Expected Shortfall (ES)**,
+estimates the **average loss in the tail beyond the VaR confidence threshold**.
+
+| | Answers |
+|---|---|
+| **VaR** | the **tail threshold**: where the worst (1 − C) of outcomes begin |
+| **CVaR** | the **average severity beyond that threshold**: how bad those worst outcomes are on average |
+
+**Why it matters for tail risk.** Two stocks can share the same VaR while one
+has much heavier losses on its worst days. CVaR shows that difference.
+- **It is not the maximum possible loss.**
+- **It describes the data or model,** not a prediction.
+
+```python
+from app.analytics.cvar import (
+    calculate_cvar_summary,      # symbol, observations, min_observations, sufficient_data,
+                                 # confidence_level, tail_mass, historical_var, historical_cvar,
+                                 # parametric_var, parametric_cvar
+    calculate_historical_cvar,
+    calculate_parametric_cvar,
+)
+
+calculate_cvar_summary(data, confidence_level=0.95, min_observations=20)
+```
+
+**Sign convention:** the same as VaR, a **positive loss magnitude**.
+- **Example:** VaR = 0.032 and CVaR = 0.047 mean a 3.2% loss threshold and a
+  4.7% average loss beyond it.
+- **No clamping:** if the tail of the sample contains gains, CVaR is smaller,
+  or even negative. It is reported as calculated.
+
+**Historical CVaR: empirical expected shortfall with fractional tail weighting**
+
+Each of the n daily returns carries probability 1/n. CVaR averages exactly the
+worst α = 1 − C of that probability mass:
+
+```
+1. losses lᵢ = −rᵢ, sorted from largest to smallest:  d₁ ≥ d₂ ≥ … ≥ dₙ
+2. tail mass  m = α × n          (rounded to 9 decimals to remove the floating-point
+                                  noise of 1 − C, e.g. 1.0000000000000009 → 1)
+3. k = ⌊m⌋, f = m − k
+4. CVaR = (d₁ + … + d_k + f × d_{k+1}) / m
+```
+
+| Observations | Confidence | Tail mass m | Historical CVaR |
+|---|---|---|---|
+| 20 | 95% | 1 | the worst loss |
+| 40 | 95% | 2 | the average of the worst two |
+| 30 | 95% | 1.5 | (worst + 0.5 × second worst) / 1.5, **not** the plain average of the worst two |
+| 20 | 99% | 0.2 | the worst loss (only part of one observation is in the tail) |
+
+- **Not a plain cutoff mean:** this is not "the mean of the returns below
+  VaR". That simple cutoff ignores the fractional boundary and depends on the
+  quantile convention.
+- **Consistent with VaR:** historical VaR uses the linear (type-7) quantile at
+  position (n − 1)α, which never lies deeper in the tail than the mass
+  boundary α·n. So **historical CVaR ≥ historical VaR** always holds.
+
+**Parametric CVaR (Normal)** uses the same mean, standard deviation and
+confidence as parametric VaR:
+
+```
+μ = mean(r),  σ = std(r, ddof = 1),  α = 1 − C,  z_α = Φ⁻¹(α)     (scipy.stats.norm.ppf)
+lower-tail conditional mean   ES_return = μ − σ × φ(z_α) / α     (φ = scipy.stats.norm.pdf)
+parametric CVaR               = −ES_return = −(μ − σ × φ(z_α) / α)
+```
+
+- **Always at least VaR:** under the normal model, φ(z_α)/α > −z_α, so
+  parametric CVaR ≥ parametric VaR.
+- **Zero variation:** with σ = 0 both equal −μ.
+- **Assumption:** this inherits the normal assumption. Real return tails are
+  often heavier, so the parametric figure can understate tail losses.
+
+**Inputs, sample size and data:**
+- **Confidence:** the same as VaR (shared validation), a finite number strictly
+  between 0 and 1.
+- **Minimum observations:** shared with VaR, **default 20**. Below it, both
+  CVaRs are **NaN**, never 0. `observations` and `tail_mass` show how much
+  data was used.
+- **Same returns as VaR:** both modules read the sample from one helper
+  (`returns_by_symbol`).
+- **Data handling:**
+  - INVALID rows give no returns and are never bridged.
+  - Rows without a date give no returns.
+  - WARNING rows count.
+  - The first return of each symbol and non-finite returns are excluded.
+  - Each symbol is independent, and the input is not modified.
+
+**Limitations:**
+- **Very few tail observations:** with 20–30 returns, the 95% tail is only 1–1.5
+  observations, and at 99% it is a fraction of one. Historical CVaR is then
+  essentially the single worst day.
+- **Scope:** 1-day and stock-level only; no portfolio CVaR, Monte Carlo or
+  longer horizons.
+- **Unadjusted prices:** prices aren't adjusted for dividends or splits.
+
+**Worked example:** 30 synthetic returns (the 20 from the VaR example, then
+0.007, −0.012, 0.011, −0.003, 0.016, −0.019, 0.002, −0.027, 0.013, −0.035),
+95% confidence.
+
+| Step | Value |
+|---|---|
+| α, tail mass | 0.05, 30 × 0.05 = **1.5** |
+| Worst losses (weights) | 0.05 (1.0), 0.04 (0.5) |
+| **Historical CVaR** | (0.05 + 0.5 × 0.04) / 1.5 = 0.07 / 1.5 = **4.6667%** (vs plain average of worst two: 4.5%) |
+| Historical VaR (for comparison) | **3.775%** |
+| Mean, sample std | −0.0036667, 0.0202677 |
+| z₀.₀₅, φ(z₀.₀₅) | −1.6448536, 0.1031356 |
+| **Parametric CVaR** | −(−0.0036667 − 0.0202677 × 0.1031356 / 0.05) = **4.5473%** |
+| Parametric VaR (for comparison) | **3.7004%** |
