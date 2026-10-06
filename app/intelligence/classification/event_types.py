@@ -1,15 +1,10 @@
-"""Keywords used to recognise each event type.
-
-``EventType`` itself is part of the stored event schema
-(app.data.schemas.event_schema).
-"""
+"""Keywords used to recognise each event type."""
 
 from app.data.schemas.event_schema import EventType
 
 
-# Checked in this order; the first type with a matching keyword wins, so more
-# specific types come before broader ones (a data breach is also a
-# cybersecurity incident, but DATA_BREACH is the more useful label).
+# Checked in order and the first match wins, so specific types (a data breach)
+# come before broader ones (a cybersecurity incident).
 EVENT_KEYWORDS = {
     EventType.FRAUD_OR_GOVERNANCE: ["fraud", "embezzlement", "misappropriation",
                                     "accounting irregularit", "forensic audit", "whistleblower"],

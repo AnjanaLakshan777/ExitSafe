@@ -1,16 +1,7 @@
-"""Tests for app.portfolio.optimizer (risk-aware, long-only, fully invested; CVXPY).
+"""Tests for the portfolio optimizer.
 
-Expected values never come from the optimizer itself:
-  * returns are rebuilt in plain Python from the generated closes
-  * mean / covariance from ``statistics``; expected shortfall in exact fractions
-  * optimality is checked by comparing the optimizer's objective with an
-    independent objective evaluated at the equal-weight portfolio, random feasible
-    portfolios and a fine grid (the optimum can never be worse)
-  * closed forms where they exist: two-asset minimum variance
-    w_A = (var_B - cov_AB) / (var_A + var_B - 2 cov_AB), and return-only LPs
-    (all weight to the highest mean, up to the caps)
-Properties guaranteed by the mathematics (monotonicity in the CVaR weight) are
-tested instead of arbitrary exact weights.
+Optimality is checked by comparing against an independently computed objective
+(equal weights, random portfolios, a fine grid) and known closed-form answers.
 """
 
 import math
@@ -138,7 +129,7 @@ def assert_valid(result, symbols, min_weight=0.0, max_weight=1.0):
     assert result.solver_status == "optimal" and result.solver == "CLARABEL"
 
 
-# 1-5. universes of 2, 3 and 4 stocks; weights valid and optimal ---------------------------------
+# Universes of 2, 3 and 4 stocks; weights valid and optimal
 
 @pytest.mark.parametrize("symbols", [("A", "B"), ("A", "B", "C"), ("A", "B", "C", "D")])
 def test_optimization_works_and_beats_every_alternative(symbols):
@@ -179,7 +170,7 @@ def test_maximum_weight_is_respected():
     assert result.max_weight == pytest.approx(0.3, abs=TOL)
 
 
-# 8-13. constraint and input validation ---------------------------------------------------------
+# Constraint and input validation
 
 def test_infeasible_minimum_weights_fail():
     data, _ = universe("A", "B", "C")
@@ -254,7 +245,7 @@ def test_infinite_parameters_fail(kwargs):
         optimize_portfolio(data, ["A", "B"], **kwargs)
 
 
-# 14-18. data handling ---------------------------------------------------------------------------
+# Data handling
 
 def test_unsorted_market_data_gives_the_same_result():
     data, _ = universe("A", "B", "C")
@@ -302,7 +293,7 @@ def test_insufficient_observations_fail_clearly():
     assert optimize_portfolio(data, ["A", "B"], min_observations=10).observations == 10
 
 
-# 19-23. expected return, variance and CVaR ---------------------------------------------------------
+# Expected return, variance and CVaR
 
 def test_expected_return_vector_matches_independent_calculation():
     data, returns = universe("A", "B", "C")
@@ -391,7 +382,7 @@ def test_confidence_99_uses_a_thinner_tail_than_95():
     assert r99.historical_cvar >= r95.historical_cvar - 1e-12
 
 
-# 26-30. objective coefficients ------------------------------------------------------------------
+# Objective coefficients
 
 def test_custom_risk_aversion():
     data, returns = universe("A", "B", "C")
@@ -439,7 +430,7 @@ def test_all_objective_weights_zero_fails():
         optimize_portfolio(data, ["A", "B"], risk_aversion=0, cvar_weight=0, return_weight=0)
 
 
-# Important optimizer test: raising the CVaR weight moves away from the risky stock --------------
+# Important optimizer test: raising the CVaR weight moves away from the risky stock
 
 def test_raising_cvar_weight_shifts_allocation_away_from_tail_risk():
     data = combine(market("H", RH), market("L", RL))
@@ -463,7 +454,7 @@ def test_raising_cvar_weight_shifts_allocation_away_from_tail_risk():
     assert w_h[-1] < 0.5 and cvars[-1] < cvars[0] / 2
 
 
-# 31-39. liquidity -------------------------------------------------------------------------------
+# Liquidity
 
 def liquid_universe(turnover_a=None, volume_a=100.0):
     """A: higher return, ADTV ~ 10,000; B: lower return, ADTV ~ 100,000,000."""
@@ -609,7 +600,7 @@ def test_liquidity_parameters_are_validated():
         optimize_portfolio(data, ["A", "B"], liquidity_constraint_enabled="yes")
 
 
-# 40-41. solver status and result validation ---------------------------------------------------
+# Solver status and result validation
 
 @pytest.mark.parametrize("status, error, message", [
     (cp.INFEASIBLE, InfeasibleConstraintsError, "Infeasible"),
@@ -662,7 +653,7 @@ def test_validate_portfolio_weights_accepts_noise_within_tolerance():
     assert list(ok) == ["A", "B"]
 
 
-# 42-45. no mutation, baseline, HHI, reproducibility ---------------------------------------------
+# No mutation, baseline, HHI, reproducibility
 
 def test_input_is_not_mutated():
     data, _ = universe("A", "B", "C")

@@ -1,8 +1,4 @@
-"""Confidence that an event is real, based on source credibility.
-
-Confidence here means "how sure are we the event happened as described", not
-"how sure are we about the price impact".
-"""
+"""How sure we are that an event really happened, based on who reported it."""
 
 from app.data.schemas.event_schema import OFFICIAL_SOURCE_TYPES, SourceType
 
@@ -27,12 +23,7 @@ def source_credibility(source_type):
 
 
 def assess_confidence(source_types):
-    """Confidence (0-1) from the source types of independent reports of one event.
-
-    Starts from the most credible source and adds a bonus for each additional
-    independent source, capped at ``UNOFFICIAL_CAP`` unless an official source
-    is among them.
-    """
+    """Confidence (0-1) from the independent sources that reported an event."""
     source_types = [SourceType(s) for s in source_types]
     if not source_types:
         raise ValueError("At least one source is required to assess confidence")

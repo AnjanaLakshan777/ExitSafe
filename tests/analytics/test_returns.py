@@ -1,7 +1,4 @@
-"""Tests for the canonical-layout path of app.analytics.returns.
-
-The Phase 1 layout (Date/Symbol/Close) stays covered by tests/test_market_data.py.
-"""
+"""Tests for daily returns on canonical data (the older layout is covered in tests/test_market_data.py)."""
 
 import math
 

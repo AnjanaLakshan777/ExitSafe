@@ -1,20 +1,4 @@
-"""Tests for app.analytics.var (stock-level 1-day VaR).
-
-Expected values are computed independently of the module under test:
-  * historical: a hand-written Hyndman & Fan type-7 (linear) quantile in plain
-    Python (``quantile7``), not numpy
-  * parametric: statistics.mean / statistics.stdev and
-    statistics.NormalDist().inv_cdf for z, not scipy
-
-Worked example (R below, 20 returns)
-  95%: alpha = 0.05; sorted lowest returns -0.05, -0.04, ...
-       h = (20 - 1) * 0.05 = 0.95 -> quantile = -0.05 + 0.95 * (-0.04 - -0.05) = -0.0405
-       historical VaR = 0.0405
-       mean = -0.063 / 20 = -0.00315, sample sd = 0.0218253..., z_0.05 = -1.6448536...
-       parametric VaR = -(-0.00315 - 1.6448536 * 0.0218253) = 0.0390494...
-  99%: h = 19 * 0.01 = 0.19 -> quantile = -0.05 + 0.19 * 0.01 = -0.0481 -> 0.0481
-       parametric VaR = -(-0.00315 - 2.3263479 * 0.0218253) = 0.0539232...
-"""
+"""Tests for app.analytics.var. Expected values use a hand-written quantile and statistics.NormalDist."""
 
 import math
 import statistics
@@ -71,7 +55,7 @@ def row(data, symbol="ABC", **kwargs):
     return calculate_var_summary(data, **kwargs).set_index("symbol").loc[symbol]
 
 
-# 1-6, 18 of the brief's list: worked example ---------------------------------------------------------
+# Worked example
 
 def test_historical_var_on_known_returns():
     result = row(prices("ABC", R))
@@ -116,7 +100,7 @@ def test_any_confidence_level_matches_independent_calculation(confidence):
     assert result["parametric_var"] == pytest.approx(ref["parametric"], rel=1e-9)
 
 
-# 7. invalid confidence ---------------------------------------------------------------------------------
+# Invalid confidence
 
 @pytest.mark.parametrize("bad", [0, 1, -0.5, 1.5, 95, float("nan"), float("inf"), "0.95", None, True])
 def test_invalid_confidence_levels_fail(bad):
@@ -130,7 +114,7 @@ def test_invalid_min_observations_fail(bad):
         calculate_var_summary(prices("ABC", R), min_observations=bad)
 
 
-# 8-10. parametric ingredients and quantile method ---------------------------------------------------------
+# Parametric ingredients and quantile method
 
 def test_parametric_var_uses_sample_standard_deviation():
     result = row(prices("ABC", R))
@@ -162,7 +146,7 @@ def test_historical_quantile_method_is_explicitly_linear():
     assert result["historical_var"] != pytest.approx(0.10)    # 'lower' would give the minimum
 
 
-# 11, 24-25. same sample, differing methods, tail ordering ------------------------------------------------------
+# Same sample, differing methods, tail ordering
 
 def test_both_methods_use_the_same_returns():
     data = prices("ABC", R + [0.01, -0.02])
@@ -189,7 +173,7 @@ def test_higher_confidence_gives_larger_var_and_expected_tail_difference():
         (nd.inv_cdf(0.05) - nd.inv_cdf(0.01)) * statistics.stdev(R), rel=1e-9)
 
 
-# 12-13. symbols and ordering -----------------------------------------------------------------------------------
+# Symbols and ordering
 
 def test_multiple_symbols_are_independent():
     other = [r * 0.5 + 0.001 for r in R]
@@ -207,7 +191,7 @@ def test_unsorted_data_is_handled():
     assert row(data)["historical_var"] == pytest.approx(0.0405, rel=1e-9)
 
 
-# 14-17. validation status and non-finite returns -----------------------------------------------------------------
+# Validation status and non-finite returns
 
 def test_invalid_rows_are_excluded_and_not_bridged():
     # Day 6's close is INVALID (an absurd 1). Both returns touching it vanish;
@@ -248,7 +232,7 @@ def test_rows_without_date_symbol_or_close_do_not_enter_var():
     assert result["historical_var"] == pytest.approx(0.0405, rel=1e-9)
 
 
-# 18-19. insufficient data and constant returns -------------------------------------------------------------------------
+# Insufficient data and constant returns
 
 @pytest.mark.parametrize("returns", [[], [0.01], R[:5], R[:19]])
 def test_insufficient_observations_give_nan_not_zero(returns):
@@ -290,7 +274,7 @@ def test_all_negative_returns():
     assert result["parametric_var"] == pytest.approx(ref["parametric"], rel=1e-9)
 
 
-# 20-22. empty input, columns, mutation ------------------------------------------------------------------------------
+# Empty input, columns, mutation
 
 def test_empty_input_is_handled():
     empty = prices("ABC", R).iloc[0:0]
@@ -315,7 +299,7 @@ def test_input_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# end-to-end: 3-symbol synthetic sample via the CSV importer --------------------------------------------------------------
+# End-to-end: 3-symbol synthetic sample via the CSV importer
 
 def test_three_symbol_sample_through_csv_importer():
     canonical = load_csv_market_data(SAMPLE_3_SYMBOLS).data

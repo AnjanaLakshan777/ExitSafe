@@ -1,34 +1,4 @@
-"""Risk-adjusted return ratios per symbol: Sharpe and Sortino.
-
-All inputs come from the existing analytics: daily simple returns from
-app.analytics.returns.calculate_daily_returns (INVALID rows never contribute
-and are never bridged; WARNING rows count) and annualized volatility from
-app.analytics.volatility. Only finite returns are used; the first return of
-each symbol (NaN) never counts.
-
-Conventions (P = periods_per_year, default 252; rf = annual risk-free rate)
-  daily risk-free rate      rf_d = (1 + rf) ** (1 / P) - 1        (compounding-consistent)
-  daily excess return       e_t  = r_t - rf_d
-  annualized excess return  mean(e) * P                           (arithmetic)
-  annualized volatility     std(r, ddof=1) * sqrt(P)              (existing volatility module)
-  Sharpe ratio              annualized excess return / annualized volatility
-  downside deviation        sqrt(mean(min(e_t, 0) ** 2)) * sqrt(P)
-                            (target = rf_d; the mean is over ALL n observations,
-                             with non-negative excess returns counting as 0)
-  Sortino ratio             annualized excess return / downside deviation
-  annualized return         (prod(1 + r_t)) ** (P / n) - 1          (geometric; reported
-                            for information, NOT the ratio numerator)
-
-The risk-free rate is an explicit input. The default 0.0 is only a calculation
-default: meaningful analysis should supply an appropriate rate.
-
-Undefined results are NaN, never 0 or infinity:
-  * fewer than MIN_OBSERVATIONS usable returns: every computed field is NaN
-  * Sharpe when daily volatility <= CONSTANT_RETURN_TOLERANCE (no variation)
-  * Sortino when the daily downside deviation <= CONSTANT_RETURN_TOLERANCE
-    (no return below the risk-free target)
-Values are full precision; rounding belongs to presentation.
-"""
+"""Sharpe and Sortino ratios for each stock. The risk-free rate is always passed in explicitly."""
 
 import math
 
@@ -73,10 +43,7 @@ def validate_risk_free_rate(risk_free_rate):
 
 def calculate_risk_adjusted_ratios(data, risk_free_rate=0.0,
                                    periods_per_year=TRADING_DAYS_PER_YEAR):
-    """Sharpe, Sortino and their components, one row per symbol (sorted).
-
-    Columns: RATIO_COLUMNS. The input is not modified.
-    """
+    """Sharpe, Sortino and the numbers behind them, one row per stock."""
     require_canonical_columns(data, "risk-adjusted ratios")
     rf_daily = daily_risk_free_rate(risk_free_rate, periods_per_year)
 

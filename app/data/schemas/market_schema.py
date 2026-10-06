@@ -1,10 +1,4 @@
-"""Canonical ExitSafe market-data schema.
-
-Every market-data source is mapped onto these columns. Values a source does
-not provide (e.g. turnover, trade count) stay null; they are never invented.
-The one derived column, ``estimated_traded_value``, is kept separate from
-``turnover`` and recorded as derived in provenance.
-"""
+"""The canonical market-data columns every source is mapped onto. Missing values stay empty."""
 
 from dataclasses import dataclass
 from enum import StrEnum
@@ -78,11 +72,7 @@ def is_missing(values):
 
 
 def parse_numbers(values):
-    """Parse numbers; missing or unparseable cells become NaN.
-
-    Thousands separators ("1,500") are accepted: that is formatting, not a
-    questionable value.
-    """
+    """Parse numbers (thousands separators allowed); anything unreadable becomes NaN."""
     if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
         return values.astype("float64")
     text = values.astype("string").str.strip().str.replace(",", "", regex=False)
@@ -116,12 +106,7 @@ def standardize_columns(data, column_map):
 
 
 def to_canonical(data, source, validation, date_format="ISO8601", source_timestamp_column=None):
-    """Build the canonical DataFrame from standardized columns and a validation result.
-
-    Invalid rows are kept and flagged (``validation_status``), never dropped or
-    repaired, so the reason each row cannot be used stays visible. Unparseable
-    values become null in the typed columns; the raw file keeps the original.
-    """
+    """Build the canonical DataFrame. Invalid rows are kept and flagged, not dropped."""
     result = pd.DataFrame(index=data.index)
     result["date"] = parse_dates(data["date"], date_format)
     symbols = data["symbol"].astype("string").str.strip()

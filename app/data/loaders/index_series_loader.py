@@ -1,22 +1,7 @@
-"""Market-index price series (e.g. ASPI, S&P SL20) -> validated index data.
+"""Load market-index price files (e.g. ASPI, S&P SL20).
 
-Stock files go through csv_market_loader, which needs open/high/low/volume. An
-index series often has only one value per day (ASPI files commonly carry no
-volume), so it gets this small loader with the same conventions:
-
-  columns   date, index_name, close (+ validation_status, validation_issues)
-  headers   Date | Index, Index Name, index_name | Close, Price, Value, Index Value
-            (matched ignoring case and spaces); a file without an Index column
-            needs ``index_name`` from the caller - it is never guessed
-  dates     the importer's normalize_dates: day and month are never swapped
-            silently; an ambiguous date is an error
-  numbers   the importer's parse_number_text ("12,345.67" -> 12345.67)
-
-Row status (nothing is repaired or dropped; analytics skip INVALID rows)
-  INVALID  MISSING_DATE, INVALID_DATE, AMBIGUOUS_DATE, MISSING_INDEX_NAME,
-           MISSING_CLOSE, INVALID_CLOSE, NON_POSITIVE_CLOSE,
-           DUPLICATE_INDEX_DATE (every copy: conflicting values cannot be resolved)
-  WARNING  WEEKEND_DATE
+Index files usually have just a date and a closing value, so they get their own
+small loader. Bad rows are marked INVALID rather than dropped.
 """
 
 import re
@@ -120,11 +105,7 @@ def load_index_csv(file_path, index_name=None, date_format=None):
 
 
 def validate_index_series(data, extra_errors=None):
-    """Add validation_status / validation_issues to a date, index_name, close frame.
-
-    Returns a new frame; the input is not modified. ``extra_errors`` maps an
-    issue code to a boolean mask (aligned to ``data``) of rows with that error.
-    """
+    """Add validation_status and validation_issues columns to an index frame."""
     frame = data[["date", "index_name", "close"]].copy()
     errors = {code: pd.Series(False, index=frame.index) for code in _ERROR_CODES}
     for code, mask in (extra_errors or {}).items():

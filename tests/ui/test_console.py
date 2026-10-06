@@ -605,3 +605,48 @@ def test_run_backtest_reports_errors():
     result, error = run_backtest(data, ["ABC"], 1_000_000, 10, 10, 5, 0.0, 95.0, 20, 252,
                                  {**BACKTEST_SETTINGS, "max_percent": 100.0})
     assert result is None and "overlap" in error
+
+
+EXIT_POLICY = {"max_safe_exit_days": 5.0, "max_caution_exit_days": 20.0,
+               "cvar_caution_percent": 5.0, "cvar_risk_percent": 10.0,
+               "stress_caution_percent": 10.0, "stress_risk_percent": 20.0,
+               "coverage_minimum_percent": 100.0, "insufficient_coverage_percent": 50.0,
+               "cvar_measure": "historical"}
+EXIT_HOLDINGS = [("ABC", 0.40), ("XYZ", 0.35), ("LMN", 0.25)]
+
+
+def test_exit_safety_tables_for_the_sample_portfolio():
+    from app.ui.console import (MULTI_SYMBOL_SAMPLE_CSV, exit_plan_display, exit_safety,
+                                exit_summary_display)
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = exit_safety(data, EXIT_HOLDINGS, 20_000_000, 5_000_000, 10.0, "Market -10%",
+                                False, EXIT_POLICY, 95.0, 20, 252)
+    assert error is None and result.overall_status == "CAUTION"
+    summary = dict(zip(*exit_summary_display(result).T.values))
+    assert summary["Target Exit Amount (Rs.)"] == "5,000,000.00"
+    assert summary["Remaining Portfolio Value (Rs.)"] == "15,000,000.00"
+    assert summary["Estimated Exit Horizon"] == "15.7 trading days"
+    assert summary["Market Impact"] == "Not modelled in the current Exit Safety version."
+    assert summary["Current Market Regime"].startswith("Unavailable")
+    plan = exit_plan_display(result).set_index("Symbol")
+    assert list(plan.columns) == ["Weight", "Holding Value (Rs.)", "Planned Exit (Rs.)",
+                                  "ADTV (Rs.)", "ADTV Source", "Exit / ADTV",
+                                  "Estimated Exit Days", "Liquidity Status"]
+    assert plan.loc["LMN", "Planned Exit (Rs.)"] == "1,250,000.00"
+    stressed, _ = exit_safety(data, EXIT_HOLDINGS, 20_000_000, 5_000_000, 10.0, "Market -10%",
+                              True, EXIT_POLICY, 95.0, 20, 252)
+    assert "Stressed Exit Days" in exit_plan_display(stressed).columns
+    assert stressed.overall_status == "AT_RISK"                    # 31.5 days > 20
+
+
+def test_exit_safety_reports_errors():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, exit_safety
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = exit_safety(data, EXIT_HOLDINGS, 20_000_000, 25_000_000, 10.0, "Market -10%",
+                                False, EXIT_POLICY, 95.0, 20, 252)
+    assert result is None and "exceeds portfolio_value" in error
+    result, error = exit_safety(data, EXIT_HOLDINGS, 20_000_000, 5_000_000, 10.0, "Market -10%",
+                                False, {**EXIT_POLICY, "max_safe_exit_days": 30.0}, 95.0, 20, 252)
+    assert result is None and "cannot exceed" in error

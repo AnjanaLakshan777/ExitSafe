@@ -28,7 +28,7 @@ def write(tmp_path, name, text):
     return path
 
 
-# --- raw loading ----------------------------------------------------------------
+# Raw loading
 
 def test_csv_values_are_preserved_exactly(tmp_path):
     raw = load_raw_market_file(write(tmp_path, "prices.csv", HF_CSV), HF)
@@ -66,7 +66,7 @@ def test_source_must_be_in_the_catalog(tmp_path):
         load_raw_market_file(write(tmp_path, "prices.csv", HF_CSV), "some_random_site")
 
 
-# --- provenance -----------------------------------------------------------------
+# Provenance
 
 def test_source_metadata_is_attached(tmp_path):
     path = write(tmp_path, "prices.csv", HF_CSV)
@@ -117,7 +117,7 @@ def test_stated_source_date_must_match_the_data(tmp_path):
     assert result.validation.issue_counts["DATE_MISMATCH"] == 2
 
 
-# --- canonical conversion -------------------------------------------------------
+# Canonical conversion
 
 def test_canonical_dataset_flags_but_keeps_invalid_rows(tmp_path):
     result = to_canonical_dataset(load_raw_market_file(write(tmp_path, "prices.csv", HF_CSV), HF))

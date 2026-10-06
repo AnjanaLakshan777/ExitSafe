@@ -16,7 +16,7 @@ PUBLISHED = datetime(2026, 3, 10, 9, 30, tzinfo=timezone.utc)
 DETECTED = PUBLISHED + timedelta(minutes=5)
 
 
-# --- classification -------------------------------------------------------------
+# Classification
 
 @pytest.mark.parametrize("title, expected", [
     ("ABC Bank investigates possible customer data exposure", EventType.DATA_BREACH),
@@ -61,7 +61,7 @@ def test_every_type_except_other_has_keywords():
     assert set(EVENT_KEYWORDS) == set(EventType) - {EventType.OTHER}
 
 
-# --- severity -------------------------------------------------------------------
+# Severity
 
 def test_every_event_type_has_a_base_severity():
     for event_type in EventType:
@@ -73,7 +73,7 @@ def test_fraud_is_rated_above_other():
     assert base_severity(EventType.OTHER) is Severity.LOW
 
 
-# --- confidence -----------------------------------------------------------------
+# Confidence
 
 def test_official_sources_are_more_credible_than_news_and_threat_intel():
     official = assess_confidence([SourceType.OFFICIAL_DISCLOSURE])
@@ -101,7 +101,7 @@ def test_confidence_needs_a_source():
         assess_confidence([])
 
 
-# --- parsing --------------------------------------------------------------------
+# Parsing
 
 def make_raw_item(source_type, **overrides):
     values = dict(

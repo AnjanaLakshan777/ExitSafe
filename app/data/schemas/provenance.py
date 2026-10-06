@@ -1,10 +1,4 @@
-"""Provenance: where an imported dataset came from, exactly.
-
-Backtests and event studies must be reproducible, so every imported file
-records its source, a content hash, when it was obtained and the date the
-*source itself* says the data refers to. That date is never filled in from the
-date that was requested.
-"""
+"""Where an imported file came from (source, hash, retrieval time), so results can be reproduced."""
 
 import hashlib
 import json

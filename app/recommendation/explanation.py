@@ -1,9 +1,4 @@
-"""Plain-language explanation of a risk signal.
-
-Evidence is always grouped by its basis, so an investor can see at a glance
-what is confirmed, what is only reported, and what is ExitSafe's own inference
-or assumption.
-"""
+"""Plain-language explanation of a risk signal, grouped by how solid each piece of evidence is."""
 
 from app.intelligence.models import EvidenceBasis
 

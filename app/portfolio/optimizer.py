@@ -1,58 +1,8 @@
-"""Risk-aware portfolio optimization (first version): long-only, fully invested, CVXPY.
+"""Risk-aware portfolio optimisation with CVXPY (long-only, fully invested).
 
-The optimizer CHOOSES weights for a user-selected universe of stocks. It is a
-historical, sample-based quantitative allocation model: it describes the
-trade-off in the data it was given and is NOT a guarantee of future returns.
-
-Scenarios (shared with every measure below)
-  The date x symbol daily-return matrix comes from
-  app.analytics.covariance.calculate_aligned_return_matrix on the universe only:
-  a date is a scenario only if every selected stock has a usable return covering
-  the same period. INVALID rows never create bridged returns, nothing is filled
-  with zero, and fewer than ``min_observations`` scenarios is an error.
-
-Inputs to the objective (all in DAILY return units, so they share one scale)
-  mu_i      expected daily return = mean of stock i's returns over the scenarios
-            (arithmetic, historical; expected annual return = mu_i * periods_per_year)
-  Sigma     daily sample covariance matrix (calculate_covariance_matrix, ddof = 1)
-  r_t       scenario t's return vector, t = 1..N, each scenario weighted 1/N
-
-Objective (minimized)
-  risk_aversion * w' Sigma w  +  cvar_weight * CVaR_alpha(w)  -  return_weight * mu' w
-
-  CVaR uses the Rockafellar-Uryasev linear representation on the scenarios:
-    loss_t = -r_t' w,   u_t >= loss_t - z,   u_t >= 0
-    CVaR   = z + (1 / (alpha * N)) * sum_t u_t,      alpha = 1 - confidence_level
-  At the optimum this equals the historical expected shortfall of the portfolio's
-  own scenario returns (fractional tail, as app.analytics.cvar), so the CVaR in
-  the objective is the portfolio's CVaR, never a combination of stock CVaRs.
-
-  The three coefficients are model parameters, finite and >= 0, at least one
-  positive, never normalized. Variance (~1e-4), CVaR (~1e-2) and mean return
-  (~1e-3) have different magnitudes, so the coefficients are not comparable
-  units. Defaults: risk_aversion = 1, cvar_weight = 1, return_weight = 1.
-
-Constraints
-  sum(w) = 1 (fully invested, no leverage); min_weight <= w_i <= max_weight with
-  0 <= min_weight <= max_weight <= 1 (long-only). n * min_weight > 1 or
-  n * max_weight < 1 is rejected before solving.
-  Optional liquidity (liquidity_constraint_enabled, needs portfolio_value V and
-  max_position_to_adtv k):  V * w_i <= k * ADTV_i, i.e. position / ADTV <= k.
-  ADTV comes from app.analytics.liquidity (reported turnover when every usable
-  day has it, otherwise the close x volume ESTIMATE, labelled as such). The
-  constraint applies to every stock with an ADTV (an ADTV of 0 forces w_i = 0);
-  a stock without usable liquidity data (no volume) is NOT constrained and is
-  reported as LIQUIDITY_NO_DATA.
-
-Solver: CLARABEL (bundled with CVXPY), tolerances SOLVER_OPTIONS. The objective
-is multiplied internally by a positive constant so its terms are of order 1
-(daily variances are ~1e-4, which would limit solver precision); that cannot
-change the optimal weights, and objective_value is reported in the original
-units. Only an OPTIMAL status is accepted;
-infeasible, unbounded, inaccurate or failed solves raise OptimizationError (or
-InfeasibleConstraintsError). The resulting weights are validated (finite,
-within bounds and liquidity limits, summing to 1 within WEIGHT_TOLERANCE) and
-the objective must be finite.
+It minimises a weighted mix of variance, CVaR and negative expected return,
+within weight limits and an optional liquidity limit. The CVaR term is built
+from the portfolio's own historical returns.
 """
 
 import math
@@ -84,18 +34,18 @@ from app.analytics.var import (
 )
 
 SOLVER = cp.CLARABEL
-# Tighter than the solver defaults (1e-8): daily-return objectives are small numbers.
+# Tighter than the solver defaults, because daily-return numbers are small.
 SOLVER_OPTIONS = {"tol_gap_abs": 1e-10, "tol_gap_rel": 1e-10, "tol_feas": 1e-10}
-WEIGHT_TOLERANCE = WEIGHT_SUM_TOLERANCE          # 1e-6, for bounds, sum and liquidity limits
-OBJECTIVE_TOLERANCE = 1e-6                       # solver objective vs recomputed objective
+WEIGHT_TOLERANCE = WEIGHT_SUM_TOLERANCE          # 1e-6
+OBJECTIVE_TOLERANCE = 1e-6                       # allowed gap when re-checking the objective
 DEFAULT_RISK_AVERSION = 1.0
 DEFAULT_CVAR_WEIGHT = 1.0
 DEFAULT_RETURN_WEIGHT = 1.0
 
 LIQUIDITY_NOT_APPLIED = "NOT_APPLIED"            # constraint disabled
 LIQUIDITY_WITHIN_LIMIT = "WITHIN_LIMIT"
-LIQUIDITY_AT_LIMIT = "AT_LIMIT"                  # position / ADTV equals the limit (binding)
-LIQUIDITY_NO_DATA = "NO_LIQUIDITY_DATA"          # no ADTV: not constrained
+LIQUIDITY_AT_LIMIT = "AT_LIMIT"                  # the limit is binding
+LIQUIDITY_NO_DATA = "NO_LIQUIDITY_DATA"          # no ADTV, so no limit applied
 LIQUIDITY_COLUMNS = ["symbol", "weight", "position_value", "average_daily_traded_value",
                      "traded_value_source", "position_to_adtv", "liquidity_weight_cap",
                      "liquidity_constraint_status"]
@@ -117,7 +67,7 @@ class InsufficientObservationsError(ValueError):
 class OptimizationScenarios:
     symbols: list
     returns: pd.DataFrame                 # date x symbol daily returns, common dates only
-    expected_daily_returns: pd.Series     # mu, mean over the scenarios
+    expected_daily_returns: pd.Series     # mean daily return per stock
     covariance: pd.DataFrame              # daily sample covariance (ddof = 1)
     observations: int
     start_date: pd.Timestamp
@@ -130,12 +80,12 @@ class OptimizationScenarios:
 class PortfolioMetrics:
     weights: dict
     expected_daily_return: float
-    expected_annual_return: float         # arithmetic: daily mean * periods_per_year
-    daily_variance: float                 # w' Sigma w
+    expected_annual_return: float         # daily mean x periods per year
+    daily_variance: float
     daily_volatility: float
     annualized_volatility: float
-    historical_var: float                 # 1-day, positive loss, linear quantile
-    historical_cvar: float                # 1-day, positive loss, fractional tail
+    historical_var: float                 # 1-day, as a positive loss
+    historical_cvar: float
     hhi: float
     max_weight: float
 
@@ -153,9 +103,9 @@ class OptimizationResult:
     hhi: float
     max_weight: float
     objective_value: float
-    variance_term: float                  # w' Sigma w at the optimum
-    cvar_term: float                      # portfolio CVaR at the optimum (scenario-based)
-    return_term: float                    # mu' w (daily) at the optimum
+    variance_term: float                  # the three objective parts at the optimum
+    cvar_term: float
+    return_term: float
     solver: str
     solver_status: str
     observations: int
@@ -186,12 +136,7 @@ def equal_weight_portfolio(symbols):
 
 def validate_portfolio_weights(weights, symbols=None, min_weight=0.0, max_weight=1.0,
                                tolerance=WEIGHT_TOLERANCE):
-    """Check a {symbol: weight} allocation; returns it as a sorted dict of floats.
-
-    Every weight finite and within [min_weight - tol, max_weight + tol], the sum
-    within tol of 1, and (if ``symbols`` is given) exactly those symbols. Raises
-    OptimizationError otherwise. Nothing is normalized.
-    """
+    """Check that weights are finite, within the limits and sum to 1. Nothing is rescaled."""
     weights = {s: float(w) for s, w in dict(weights).items()}
     if symbols is not None and set(weights) != set(symbols):
         raise OptimizationError("The allocation does not cover exactly the selected symbols")
@@ -269,11 +214,7 @@ def optimize_portfolio(data, symbols,
                        portfolio_value=None,
                        liquidity_constraint_enabled=False,
                        max_position_to_adtv=None):
-    """Long-only, fully invested weights minimizing the documented objective.
-
-    Returns an OptimizationResult. Raises ValueError for invalid inputs,
-    InsufficientObservationsError, InfeasibleConstraintsError or OptimizationError.
-    """
+    """Choose long-only, fully invested weights for the selected stocks."""
     coefficients = validate_objective_weights(risk_aversion, cvar_weight, return_weight)
     validate_confidence_level(confidence_level)
     validate_min_observations(min_observations)
@@ -374,14 +315,12 @@ def _solve_problem(scenarios, coefficients, confidence_level, min_weight, max_we
     if return_weight > 0:
         objective -= return_weight * (mu @ w)
     if caps is not None:
-        # V * w_i <= k * ADTV_i, written as w_i <= k * ADTV_i / V: the same linear
-        # constraint, but with weight-scale numbers (Rs. amounts in the tens of
-        # millions would make the problem badly scaled for the solver).
+        # position / ADTV <= k, written in weight terms so the solver stays well scaled.
         constrained = [i for i, s in enumerate(symbols) if math.isfinite(caps[s])]
         if constrained:
             constraints.append(w[constrained] <= caps.iloc[constrained].to_numpy())
 
-    # positive rescaling for numerical conditioning only (same minimizer)
+    # Scaling the objective doesn't change the answer but improves solver precision.
     scale = 1 / max(risk_aversion * float(np.abs(np.diag(sigma)).max()),
                     cvar_weight * float(np.abs(r).max()),
                     return_weight * float(np.abs(mu).max()), 1e-12)
@@ -406,7 +345,7 @@ def _solve_problem(scenarios, coefficients, confidence_level, min_weight, max_we
     if caps is not None and (values > caps.to_numpy() + WEIGHT_TOLERANCE).any():
         raise OptimizationError("The solver result breaks the liquidity constraint; the "
                                 "result is rejected.")
-    # remove solver noise within the tolerance (e.g. -1e-10) without rescaling
+    # Clip tiny solver noise (like -1e-10) back inside the bounds.
     values = np.clip(values, min_weight, upper)
     value = problem.value
     return dict(zip(symbols, values.tolist())), status, (float(value) / scale
@@ -423,10 +362,7 @@ def _solve(problem):
 
 
 def _adtv(data, symbols):
-    """ADTV and traded-value source per symbol (index) from the stock-level liquidity module.
-
-    ADTV NaN and source None when a stock has no usable liquidity data (e.g. no volume).
-    """
+    """ADTV and its source for each symbol (NaN when there's no usable volume data)."""
     table = pd.DataFrame({"adtv": math.nan, "source": None}, index=symbols)
     if "volume" in data.columns:
         summary = calculate_liquidity_summary(data[data["symbol"].isin(symbols)])

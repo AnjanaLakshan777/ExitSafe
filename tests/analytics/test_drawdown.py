@@ -1,17 +1,4 @@
-"""Tests for app.analytics.drawdown.
-
-Expected values are worked out by hand, not with the module under test.
-
-Worked example (from the brief)
-  closes        100   110   120   108    90    105
-  running peak  100   110   120   120   120    120
-  drawdown        0     0     0  -10%  -25%  -12.5%
-  maximum drawdown = -0.25, peak 120 (day 3), trough 90 (day 5), not recovered
-
-Recovery example
-  closes 100, 120, 96, 110, 125 -> MDD = 96/120 - 1 = -0.20, peak 120 (day 2),
-  trough 96 (day 3), recovery on day 5 (125 >= 120)
-"""
+"""Tests for app.analytics.drawdown, with expected values worked out by hand."""
 
 import math
 from pathlib import Path
@@ -44,7 +31,7 @@ def summary_row(data, symbol):
     return calculate_maximum_drawdown(data).set_index("symbol").loc[symbol]
 
 
-# 1-5. worked example ------------------------------------------------------------------------------
+# Worked example
 
 def test_known_sequence_gives_expected_maximum_drawdown():
     row = summary_row(prices("ABC", BRIEF), "ABC")
@@ -89,7 +76,7 @@ def test_peak_is_the_latest_date_at_the_peak_level():
     assert row["maximum_drawdown"] == pytest.approx(-0.25)
 
 
-# 6-7. recovery ------------------------------------------------------------------------------------
+# Recovery
 
 def test_recovered_drawdown_has_recovery_date():
     row = summary_row(prices("ABC", [100, 120, 96, 110, 125]), "ABC")
@@ -108,7 +95,7 @@ def test_unrecovered_drawdown_has_no_recovery_date():
     assert pd.isna(row["recovery_date"])
 
 
-# 8-11. shapes of price paths ----------------------------------------------------------------------
+# Shapes of price paths
 
 def test_monotonically_increasing_series_has_zero_drawdown_and_no_event():
     row = summary_row(prices("ABC", [100, 101, 105, 110]), "ABC")
@@ -146,7 +133,7 @@ def test_equal_worst_drawdowns_report_the_earliest():
     assert row["recovery_date"] == DAYS[2]
 
 
-# 12-13. symbols and ordering -------------------------------------------------------------------------
+# Symbols and ordering
 
 def test_symbols_are_independent():
     data = pd.concat([prices("ABC", BRIEF), prices("XYZ", [10, 8, 12, 9, 6, 7])])
@@ -170,7 +157,7 @@ def test_unsorted_input_is_sorted_chronologically():
     assert summary_row(data, "ABC")["maximum_drawdown"] == pytest.approx(-0.25)
 
 
-# 14-16. validation status ------------------------------------------------------------------------------
+# Validation status
 
 def test_invalid_rows_are_excluded():
     # The INVALID 30 would otherwise be a -75% trough.
@@ -215,7 +202,7 @@ def test_missing_calendar_days_are_not_filled_in():
     assert list(series["drawdown"]) == pytest.approx([0, 0, -0.10, -0.05])
 
 
-# 17. tiny inputs --------------------------------------------------------------------------------------
+# Tiny inputs
 
 def test_one_observation_is_not_a_misleading_zero():
     row = summary_row(prices("ABC", [100]), "ABC")
@@ -228,7 +215,7 @@ def test_two_observations():
     assert summary_row(prices("XYZ", [100, 120]), "XYZ")["maximum_drawdown"] == 0.0
 
 
-# 18-21. empty input, columns, duplicates, mutation ----------------------------------------------------------
+# Empty input, columns, duplicates, mutation
 
 def test_empty_input_gives_empty_results_with_columns():
     empty = prices("ABC", BRIEF).iloc[0:0]
@@ -272,7 +259,7 @@ def test_input_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# end-to-end: 3-symbol synthetic sample through the CSV importer --------------------------------------------------
+# End-to-end: 3-symbol synthetic sample through the CSV importer
 
 def test_three_symbol_sample_through_csv_importer():
     canonical = load_csv_market_data(SAMPLE_3_SYMBOLS).data

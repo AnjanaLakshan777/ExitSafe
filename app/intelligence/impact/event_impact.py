@@ -1,9 +1,4 @@
-"""Potential financial/market impact of an event.
-
-Impact is expressed as a risk direction plus a set of *scenarios* (ranges of
-possible price change under stated assumptions), never as a single predicted
-price move.
-"""
+"""Possible market impact of an event, given as scenarios rather than a single predicted move."""
 
 from dataclasses import dataclass
 
@@ -36,10 +31,5 @@ class EventImpact:
 
 
 def assess_event_impact(event, market_data):
-    """Estimate the potential impact of ``event`` using cleaned ``market_data``.
-
-    Planned inputs: event type/severity/confidence, the stock's recent
-    volatility and liquidity (Value Traded) from the market-data domain, and
-    historical reactions to similar events from data/intelligence/historical.
-    """
+    """Estimate the possible impact of an event from market data."""
     raise NotImplementedError("Event impact assessment is not implemented yet")

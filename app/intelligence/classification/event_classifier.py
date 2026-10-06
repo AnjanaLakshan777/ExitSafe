@@ -1,9 +1,4 @@
-"""Rule-based event classification.
-
-A transparent keyword baseline: every classification records the terms that
-triggered it, so it can be shown as evidence. A statistical/ML classifier can
-replace ``classify_event`` later behind the same signature.
-"""
+"""Keyword-based event classification. Each result records the words that triggered it."""
 
 import re
 from dataclasses import dataclass

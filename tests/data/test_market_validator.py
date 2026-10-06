@@ -22,7 +22,7 @@ def issues_of(result, row):
     return set(result.row_issues.iloc[row])
 
 
-# --- valid data -----------------------------------------------------------------
+# Valid data
 
 def test_valid_market_data_passes():
     result = validate_market_data(frame(*GOOD_ROWS))
@@ -58,7 +58,7 @@ def test_input_is_not_modified():
     pd.testing.assert_frame_equal(data, before)
 
 
-# --- dates ----------------------------------------------------------------------
+# Dates
 
 @pytest.mark.parametrize("bad_date", ["not-a-date", "2026-02-30", "05/01/2026"])
 def test_invalid_date_is_reported(bad_date):
@@ -91,7 +91,7 @@ def test_weekend_date_is_a_warning_not_an_error():
     assert result.invalid_rows == 0
 
 
-# --- prices ---------------------------------------------------------------------
+# Prices
 
 @pytest.mark.parametrize("column, value, code", [
     ("close", "0", "NON_POSITIVE_CLOSE"),
@@ -115,7 +115,7 @@ def test_thousands_separators_are_accepted():
     assert result.status is DatasetStatus.PASS
 
 
-# --- OHLC relationships ---------------------------------------------------------
+# OHLC relationships
 
 @pytest.mark.parametrize("o, h, l, c, expected", [
     ("100", "103", "101", "102", {"LOW_ABOVE_OPEN"}),
@@ -148,7 +148,7 @@ def test_questionable_values_are_not_repaired():
     assert data.loc[0, "high"] == "98"
 
 
-# --- volume ---------------------------------------------------------------------
+# Volume
 
 def test_negative_volume_is_reported():
     result = validate_market_data(frame(*GOOD_ROWS, ["2026-01-07", "ABC.N0000", "1", "1", "1", "1", "-5"]),
@@ -173,7 +173,7 @@ def test_volume_warnings(o, h, l, c, volume, expected):
     assert result.invalid_rows == 0
 
 
-# --- duplicates -----------------------------------------------------------------
+# Duplicates
 
 def test_duplicate_symbol_date_rows_are_all_flagged():
     data = frame(*GOOD_ROWS,
@@ -194,7 +194,7 @@ def test_exact_duplicate_rows_are_counted():
     assert result.duplicate_rows == 2
 
 
-# --- missing columns ------------------------------------------------------------
+# Missing columns
 
 def test_missing_required_columns_fail_without_raising():
     data = frame(["2026-01-05", "ABC.N0000", "102"], columns=["date", "symbol", "close"])
@@ -207,7 +207,7 @@ def test_missing_required_columns_fail_without_raising():
     assert result.invalid_rows == 1
 
 
-# --- dataset status and source-date rule ----------------------------------------
+# Dataset status and source-date rule
 
 def test_small_share_of_invalid_rows_is_a_warning():
     rows = [["2026-01-05", f"S{i}.N0000", "1", "1", "1", "1", "1"] for i in range(99)]

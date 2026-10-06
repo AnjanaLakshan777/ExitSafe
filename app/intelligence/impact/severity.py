@@ -1,9 +1,4 @@
-"""Severity assessment.
-
-The baseline is a per-event-type prior. It is a *model inference*, not a fact,
-and will later be adjusted by company size, sector, exposure and market
-reaction.
-"""
+"""Severity of an event, starting from a simple default per event type."""
 
 from app.data.schemas.event_schema import EventType, Severity
 

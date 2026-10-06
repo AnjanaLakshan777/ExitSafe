@@ -1,16 +1,7 @@
-"""Canonical event schema.
+"""Stored market events.
 
-Events are stored data (they are replayed later for backtesting and event
-studies), so their schema lives in the data layer. The intelligence domain
-produces these events; it does not define them.
-
-Design rules encoded here:
-  * Events are immutable. Assessments (severity, confidence, verification
-    changes) produce a new event via ``dataclasses.replace``, which re-runs
-    validation.
-  * An event is only CONFIRMED when its source is an official one (company,
-    exchange disclosure or regulator). A news report, search result or
-    threat-intelligence claim can never be stored as a confirmed company event.
+Events are immutable: an assessment creates a new copy. Only an official source
+(company, exchange or regulator) can mark an event as confirmed.
 """
 
 import hashlib

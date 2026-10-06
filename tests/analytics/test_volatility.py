@@ -1,9 +1,4 @@
-"""Tests for app.analytics.volatility.
-
-Expected values are computed independently of the module under test: from
-hand-written return lists with Python's ``statistics.stdev`` (sample standard
-deviation), or from literals derived with exact rational arithmetic.
-"""
+"""Tests for app.analytics.volatility, checked against statistics.stdev and hand-worked values."""
 
 import math
 import statistics
@@ -46,7 +41,7 @@ def row(result, symbol):
     return result.set_index("symbol").loc[symbol]
 
 
-# 1. known example -----------------------------------------------------------------------------
+# Known example
 
 def test_known_returns_give_expected_daily_volatility():
     result = calculate_daily_volatility(prices("ABC", [100, 102, 101, 103]))
@@ -64,7 +59,7 @@ def test_sample_not_population_standard_deviation():
     assert vol == pytest.approx(population * math.sqrt(3 / 2))
 
 
-# 2. annualization ------------------------------------------------------------------------------
+# Annualization
 
 def test_annualized_is_daily_times_sqrt_252():
     result = row(calculate_annualized_volatility(prices("ABC", [100, 102, 101, 103])), "ABC")
@@ -89,7 +84,7 @@ def test_invalid_periods_per_year_is_rejected(bad):
         calculate_annualized_volatility(prices("ABC", [100, 102, 101]), periods_per_year=bad)
 
 
-# 3 & 10. per symbol, histories never mixed -----------------------------------------------------
+# Per symbol, histories never mixed
 
 def test_volatility_is_calculated_separately_for_each_symbol():
     abc, xyz = [100, 102, 101, 103, 104], [10, 9.5, 9.8, 9.1]
@@ -121,7 +116,7 @@ def test_unsorted_dates_are_ordered_before_returns():
         EXAMPLE_DAILY_VOL, rel=1e-12)
 
 
-# 4. no mutation -----------------------------------------------------------------------------------
+# No mutation
 
 def test_input_dataframe_is_not_mutated():
     data = prices("ABC", [100, 102, 101, 103], status=["VALID", "INVALID", "VALID", "VALID"])
@@ -132,7 +127,7 @@ def test_input_dataframe_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# 5. first NaN return ------------------------------------------------------------------------------
+# First NaN return
 
 def test_first_nan_return_does_not_break_calculation():
     result = row(calculate_daily_volatility(prices("ABC", [100, 102, 101, 103])), "ABC")
@@ -140,7 +135,7 @@ def test_first_nan_return_does_not_break_calculation():
     assert not math.isnan(result["daily_volatility"])
 
 
-# 6. invalid rows -----------------------------------------------------------------------------------
+# Invalid rows
 
 def test_invalid_rows_do_not_participate():
     # Row 3 is INVALID with an absurd close. Both returns that touch it are
@@ -171,7 +166,7 @@ def test_non_finite_returns_are_ignored():
     assert result["daily_volatility"] == pytest.approx(statistics.stdev(finite))
 
 
-# 7. insufficient observations ------------------------------------------------------------------------
+# Insufficient observations
 
 @pytest.mark.parametrize("closes, observations", [([100], 0), ([100, 101], 1)])
 def test_insufficient_observations_give_nan_not_zero(closes, observations):
@@ -195,7 +190,7 @@ def test_all_rows_invalid_gives_nan():
     assert math.isnan(result["daily_volatility"])
 
 
-# 8. constant returns ---------------------------------------------------------------------------------
+# Constant returns
 
 def test_constant_prices_give_zero_volatility():
     result = row(calculate_annualized_volatility(prices("ABC", [100, 100, 100, 100])), "ABC")
@@ -208,7 +203,7 @@ def test_constant_growth_gives_zero_volatility_within_rounding():
     assert result["daily_volatility"] == pytest.approx(0.0, abs=1e-12)
 
 
-# 9. negative returns ----------------------------------------------------------------------------------
+# Negative returns
 
 def test_negative_returns_are_handled():
     falling = [100, 95, 92, 90, 84]
@@ -225,7 +220,7 @@ def test_mixed_sign_returns():
     assert result["daily_volatility"] == pytest.approx(statistics.stdev([-0.1, 0.1, -0.1, 0.1]))
 
 
-# 11-12. empty input and missing columns ----------------------------------------------------------------
+# Empty input and missing columns
 
 def test_empty_input_returns_empty_result():
     empty = prices("ABC", [100]).iloc[0:0]
@@ -249,7 +244,7 @@ def test_phase1_layout_is_not_accepted():
         calculate_daily_volatility(legacy)
 
 
-# end-to-end with the CSV importer ------------------------------------------------------------------------
+# End-to-end with the CSV importer
 
 def test_works_on_canonical_data_from_the_csv_importer():
     canonical = load_csv_market_data(FIXTURE, symbol="TEST.N0000").data

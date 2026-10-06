@@ -1,10 +1,4 @@
-"""Presentation helpers for the analytics test console.
-
-Kept free of Streamlit so they can be unit-tested. All data work is delegated to
-the existing layers: CSV import -> canonical data -> validation -> analytics.
-Nothing here parses CSV or calculates returns or volatility itself; it only
-calls those functions and formats their results for display.
-"""
+"""Helpers behind the Streamlit test console, kept free of Streamlit so they can be unit-tested."""
 
 import math
 import tempfile
@@ -14,6 +8,15 @@ from pathlib import Path
 import pandas as pd
 
 from app.backtesting.backtest_engine import BacktestConfig, run_walk_forward_backtest
+from app.exit_engine.exit_safety import AT_RISK as EXIT_AT_RISK
+from app.exit_engine.exit_safety import CAUTION as EXIT_CAUTION
+from app.exit_engine.exit_safety import INSUFFICIENT_DATA as EXIT_INSUFFICIENT_DATA
+from app.exit_engine.exit_safety import SAFE as EXIT_SAFE
+from app.exit_engine.exit_safety import (
+    PRICE_STRESS_SCENARIOS,
+    ExitSafetyPolicy,
+    assess_exit_safety,
+)
 from app.analytics.covariance import (
     calculate_annualized_covariance_matrix,
     calculate_correlation_matrix,
@@ -106,12 +109,7 @@ class ConsoleOutcome:
 
 
 def run_import(file_name, content, symbol=None):
-    """Import CSV bytes with the real importer, then run returns and volatility.
-
-    The bytes are written under their original file name in a temporary folder
-    (the importer reads files so it can hash them for provenance) and removed
-    afterwards.
-    """
+    """Import uploaded bytes with the real CSV importer and run the basic analytics."""
     symbol = (symbol or "").strip() or None
     try:
         with tempfile.TemporaryDirectory() as folder:
@@ -390,8 +388,7 @@ WEIGHT_PERCENT_TOLERANCE = 1e-4      # = WEIGHT_SUM_TOLERANCE (1e-6) expressed i
 
 
 def default_holdings_text(symbols):
-    """Equal weights in percent, one "SYMBOL, weight" line each; the last line takes the
-    rounding remainder so the total is exactly 100. A starting point to edit."""
+    """Equal weights for the given symbols; the last line takes the rounding remainder."""
     symbols = sorted(symbols)
     if not symbols:
         return ""
@@ -401,12 +398,7 @@ def default_holdings_text(symbols):
 
 
 def parse_holdings(text):
-    """(list of (symbol, weight as a fraction), error message) from "SYMBOL, weight %" lines.
-
-    Separators: comma, tab or spaces; a trailing % is allowed; blank lines are ignored.
-    The weights must total 100% — they are never rescaled. Duplicates, negatives and
-    unknown symbols are reported by the analytics layer.
-    """
+    """Read "SYMBOL, weight %" lines into (symbol, fraction) pairs. Weights must total 100%."""
     pairs = []
     for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
@@ -573,11 +565,7 @@ TREND_LABELS = {"UPTREND": "Uptrend", "DOWNTREND": "Downtrend", "NEUTRAL": "Neut
 
 
 def load_index_data(file_name, content, index_name=None):
-    """(IndexImportResult, error message). Bytes are read via a temporary file, as in run_import.
-
-    ``index_name`` is used only when the file has no Index column; a file that
-    names its index keeps its own names.
-    """
+    """Load uploaded index bytes; index_name is only used if the file has no Index column."""
     try:
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / Path(file_name).name
@@ -643,11 +631,7 @@ LIQUIDITY_STATUS_TEXT = {LIQUIDITY_STRESS_OK: "OK", LIQUIDITY_STRESS_ZERO: "Zero
 
 
 def parse_sector_mapping(text):
-    """(None or {symbol: sector}, error message) from "SYMBOL, Sector" lines.
-
-    The first comma or tab separates the symbol from the sector, so sector names
-    may contain spaces ("Banking Finance & Insurance"). Blank text gives None.
-    """
+    """Read "SYMBOL, Sector" lines into a dict; sector names may contain spaces."""
     mapping = {}
     for number, line in enumerate(text.splitlines(), start=1):
         if not line.strip():
@@ -664,11 +648,7 @@ def parse_sector_mapping(text):
 
 def custom_stress_scenario(market_percent=0.0, sector_name="", sector_percent=0.0,
                            volatility_multiplier=0.0, liquidity_multiplier=1.0):
-    """(None or a StressScenario, error message) from the custom inputs.
-
-    A component is used only when set: market or sector shock other than 0%,
-    volatility multiplier above 0, liquidity multiplier below 1.
-    """
+    """Build the custom scenario from the inputs; fields left at their defaults are ignored."""
     sector_name = (sector_name or "").strip()
     if sector_percent and not sector_name:
         return None, "Enter a sector name for the custom sector shock."
@@ -822,3 +802,92 @@ def backtest_final_weights_display(result):
                          **{label: [format_percent(w.get(s)) if w else "n/a"
                                     for s in result.config.symbols]
                             for label, w in result.final_weights.items()}})
+
+
+EXIT_STATUS_LABELS = {EXIT_SAFE: "SAFE", EXIT_CAUTION: "CAUTION", EXIT_AT_RISK: "AT RISK",
+                      EXIT_INSUFFICIENT_DATA: "INSUFFICIENT DATA"}
+EXIT_STRESS_SCENARIOS = list(PRICE_STRESS_SCENARIOS)
+REGIME_UNAVAILABLE_LABEL = "Unavailable (no usable market-index data)"
+
+
+def exit_safety(data, holdings, portfolio_value, target_exit_value, participation_percent,
+                stress_scenario, liquidity_stress, policy_settings, confidence_percent,
+                min_observations, periods_per_year, index_data=None, index_name=None):
+    """Run the exit assessment from UI inputs (percent values like 10.0 mean 10%)."""
+    s = policy_settings
+    try:
+        policy = ExitSafetyPolicy(
+            max_safe_exit_days=float(s["max_safe_exit_days"]),
+            max_caution_exit_days=float(s["max_caution_exit_days"]),
+            cvar_caution_threshold=s["cvar_caution_percent"] / 100,
+            cvar_risk_threshold=s["cvar_risk_percent"] / 100,
+            stress_caution_threshold=s["stress_caution_percent"] / 100,
+            stress_risk_threshold=s["stress_risk_percent"] / 100,
+            coverage_minimum=s["coverage_minimum_percent"] / 100,
+            insufficient_coverage_ratio=s["insufficient_coverage_percent"] / 100,
+            cvar_measure=s["cvar_measure"])
+        return assess_exit_safety(
+            data, holdings, float(portfolio_value), float(target_exit_value),
+            participation_rate=participation_percent / 100, stress_scenario=stress_scenario,
+            liquidity_stress_multiplier=0.5 if liquidity_stress else None, policy=policy,
+            index_data=index_data, index_name=index_name,
+            confidence_level=confidence_percent / 100, min_observations=int(min_observations),
+            periods_per_year=periods_per_year), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def exit_summary_display(result):
+    """A new, display-only Metric / Value table of the exit assessment."""
+    def days(value):
+        return "n/a" if pd.isna(value) else f"{value:,.1f} trading days"
+
+    horizon = days(result.estimated_exit_days)
+    if result.liquidity_stress_multiplier is not None:
+        horizon += (f" (Liquidity {result.liquidity_stress_multiplier - 1:+.0%}: "
+                    f"{days(result.stressed_exit_days)})")
+    coverage = format_percent(result.coverage_ratio)
+    if result.liquidity_data_missing:
+        coverage += f" (no liquidity data: {', '.join(result.liquidity_data_missing)})"
+    regime = (REGIME_UNAVAILABLE_LABEL if result.market_regime == "REGIME_DATA_UNAVAILABLE" else
+              f"{result.market_regime} ({result.regime_index}; trend {result.trend_state}, "
+              f"drawdown {format_percent(result.current_drawdown)}, volatility "
+              f"{format_percent(result.rolling_volatility)})")
+    stress = ("n/a (unavailable)" if pd.isna(result.stress_loss) else
+              f"{format_percent(result.stress_loss)} ({result.stress_scenario}), "
+              f"Rs. {_amount(result.reference_stress_loss_amount)} on the target")
+    rows = [
+        ("Target Exit Amount (Rs.)", _amount(result.target_exit_value)),
+        ("Remaining Portfolio Value (Rs.)", _amount(result.remaining_portfolio_value)),
+        ("Estimated Exit Horizon", horizon),
+        ("Liquidity Coverage", coverage),
+        ("Historical VaR / CVaR (1-day)",
+         f"{format_percent(result.historical_var)} / {format_percent(result.historical_cvar)}"),
+        ("Parametric VaR / CVaR (1-day)",
+         f"{format_percent(result.parametric_var)} / {format_percent(result.parametric_cvar)}"),
+        ("Reference CVaR Loss on target (Rs.)", _amount(result.reference_cvar_loss_amount)),
+        ("Hypothetical Stress Loss", stress),
+        ("Current Market Regime", regime),
+        ("Market Impact", result.market_impact),
+    ]
+    return pd.DataFrame(rows, columns=["Metric", "Value"])
+
+
+def exit_plan_display(result):
+    """A new, display-only holding exit plan."""
+    plan = result.holdings_table()
+    table = pd.DataFrame({
+        "Symbol": plan["symbol"],
+        "Weight": [format_percent(w) for w in plan["weight"]],
+        "Holding Value (Rs.)": [_amount(v) for v in plan["holding_value"]],
+        "Planned Exit (Rs.)": [_amount(v) for v in plan["planned_exit_value"]],
+        "ADTV (Rs.)": [_amount(v) for v in plan["average_daily_traded_value"]],
+        "ADTV Source": [TRADED_VALUE_SOURCE_LABELS.get(s, "n/a")
+                        for s in plan["traded_value_source"]],
+        "Exit / ADTV": [_amount(v, 3) for v in plan["exit_value_to_adtv"]],
+        "Estimated Exit Days": [_amount(v) for v in plan["estimated_exit_days"]],
+    })
+    if result.liquidity_stress_multiplier is not None:
+        table["Stressed Exit Days"] = [_amount(v) for v in plan["stressed_exit_days"]]
+    table["Liquidity Status"] = plan["liquidity_status"]
+    return table

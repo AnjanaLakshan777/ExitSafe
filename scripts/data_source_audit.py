@@ -1,14 +1,10 @@
-"""Data source audit: what market data do we actually have, and can it be trusted?
+"""Audit the market data we have locally: what's there and whether it can be trusted.
 
     python scripts/data_source_audit.py                              # every known local dataset
     python scripts/data_source_audit.py --file F.csv --source NAME   # one catalogued file
-    python scripts/data_source_audit.py --file F.csv --source NAME --source-date 2026-09-30
 
-The report is printed and written to data/processed/audit/
-data_availability_report.txt, with one provenance manifest (JSON) per audited
-file. Exit code is 1 if any audited dataset FAILs validation.
-
-Nothing here downloads data; see scripts/fetch_secondary_datasets.py.
+Writes a report to data/processed/audit/ and exits with 1 if any dataset fails
+validation. Nothing is downloaded.
 """
 
 import argparse
@@ -100,7 +96,7 @@ def read_download_record(file_path):
     return {**record, "file": entry} if entry else None
 
 
-# --- availability checks -------------------------------------------------------
+# Availability checks
 
 def market_availability(data):
     usable = data[data["validation_status"] != "INVALID"]
@@ -177,7 +173,7 @@ def company_availability(path, prices):
     }
 
 
-# --- report formatting ----------------------------------------------------------
+# Report formatting
 
 def format_audit(outcome):
     source = next(s for s in SOURCE_CATALOG if s.source_name == outcome.target.source_name)
@@ -288,7 +284,7 @@ def build_report(outcomes):
     return "\n\n".join(sections) + "\n"
 
 
-# --- helpers --------------------------------------------------------------------
+# Helpers
 
 def _source(outcome):
     return next(s for s in SOURCE_CATALOG if s.source_name == outcome.target.source_name)

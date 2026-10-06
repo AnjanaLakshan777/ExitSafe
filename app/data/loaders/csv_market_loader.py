@@ -1,25 +1,7 @@
-"""Generic CSV market-data import: provider-specific layouts -> canonical market data.
+"""Import market-data CSVs from different providers into the canonical format.
 
-Users can import historical price CSVs from different providers without editing
-the file. For example::
-
-    Date,Price,Open,High,Low,Vol.,Change %
-    12/31/2025,660.09,664.75,665,659.44,7.94M,-0.88%
-
-becomes canonical rows with ``close`` (from Price), ``volume`` (7940000) and
-``change_pct`` (-0.88).
-
-Pipeline (each step reports instead of guessing):
-  1. read the file unchanged and attach provenance  (load_raw_market_file)
-  2. detect columns from aliases; conflicting duplicates are flagged, not chosen
-  3. normalize values to plain text: K/M/B volumes, thousands separators,
-     percent signs, and dates to ISO (ambiguous dates are rejected, never swapped)
-  4. validate with the shared canonical validator (+ importer-specific row checks)
-  5. build the canonical frame and an import report
-
-Analytical returns are always computed from close prices elsewhere
-(app.analytics.returns); a supplied "Change %" is kept for reference and only
-compared against the closes to warn about inconsistencies.
+Column names are matched against known aliases, values like "7.94M" are parsed,
+and day and month are never swapped silently. Problems are flagged, not fixed.
 """
 
 import re
@@ -43,10 +25,8 @@ from app.data.validators.market_validator import ValidationResult, validate_mark
 
 USER_CSV_SOURCE = "user_csv_upload"
 
-# Canonical field -> accepted source headers, highest priority first. Headers
-# match ignoring case and whitespace, so "Change %" == "change%" and
-# "Vol." == "vol.". When several headers for one field are present, the first
-# listed wins and the others are compared against it.
+# Accepted source headers for each field, best first. Case and spaces are ignored.
+# If a file has several of them, the first one wins and the rest are cross-checked.
 COLUMN_ALIASES = {
     "date": ["Date"],
     "symbol": ["Symbol"],
@@ -64,8 +44,7 @@ COLUMN_ALIASES = {
 SUFFIX_FIELDS = frozenset({"volume", "turnover"})
 MULTIPLIERS = {"K": Decimal(10) ** 3, "M": Decimal(10) ** 6, "B": Decimal(10) ** 9}
 
-# Maximum gap, in percentage points, between a supplied Change % and the change
-# implied by consecutive closes before a CHANGE_PCT_MISMATCH warning.
+# How far (in percentage points) a supplied Change % may differ from the closes.
 CHANGE_PCT_TOLERANCE = 0.05
 
 # A file name can stand in for a symbol only if it is exactly a symbol (JKH.N0000.csv).
@@ -80,24 +59,11 @@ class MarketDataImportError(ValueError):
 
 
 class SymbolRequiredError(MarketDataImportError):
-    """The data has no Symbol column and no symbol was supplied.
+    """The file has no Symbol column and no symbol was given. Ask the user; never guess it."""
 
-    Callers with a user interface should ask the user for the symbol and retry;
-    ExitSafe never guesses it.
-    """
-
-
-# --- value parsing --------------------------------------------------------------------------
 
 def parse_number_text(value, allow_suffix=False):
-    """Normalize one numeric cell to plain decimal text.
-
-    Returns "" for a missing value, the normalized text for a readable number
-    ("7.94M" -> "7940000", "250,000" -> "250000"), or None when the value is
-    not a number this importer can read safely. "." is always the decimal point
-    and "," only a thousands separator in groups of three, so "1.234,5" or "1,23"
-    are rejected instead of misread. Decimal arithmetic avoids float artefacts.
-    """
+    """Normalise one number cell to plain text ("7.94M" -> "7940000"); None if it can't be read safely."""
     if value is None or isinstance(value, bool):
         return "" if value is None else None
     if isinstance(value, (int, float, Decimal)):
@@ -115,9 +81,7 @@ def parse_number_text(value, allow_suffix=False):
 
 
 def parse_percent_text(value, percent_units=False):
-    """'-0.88%' -> '-0.88' (percent units). A value without a % sign is only
-    accepted when the column is known to hold percentages (header contains % or
-    'pct'); a bare 'Change' column could equally be an absolute price change."""
+    """Turn '-0.88%' into '-0.88'. A value without % is only accepted for known percent columns."""
     if value is None or (isinstance(value, float) and value != value):
         return ""
     if not isinstance(value, str):
@@ -136,16 +100,9 @@ def _decimal_text(number):
 
 
 def normalize_dates(values, date_format=None):
-    """Convert dates to ISO text without ever swapping day and month silently.
+    """Convert dates to ISO text without guessing between day-first and month-first.
 
-    Returns (iso_values, ambiguous_mask, convention). With ``date_format`` the
-    given strptime format is applied strictly. Otherwise ISO dates (2025-12-31)
-    pass through, and D/M/YYYY-style dates use the file's convention: if any
-    first part is > 12 the file is day-first, if any second part is > 12 it is
-    month-first. Without such evidence (or with contradictory evidence) a row is
-    only accepted when it is unambiguous on its own (a part > 12, or day ==
-    month); otherwise it is flagged AMBIGUOUS_DATE. Unreadable values are kept
-    as-is so the validator reports INVALID_DATE.
+    Rows whose order can't be worked out are flagged as ambiguous.
     """
     text = values.astype("string").str.strip()
     present = ~is_missing(values)
@@ -190,8 +147,6 @@ def normalize_dates(values, date_format=None):
     return result, ambiguous, ", ".join(labels) or "none recognised"
 
 
-# --- column detection and normalization ----------------------------------------------------------
-
 def _key(name):
     return re.sub(r"\s+", "", str(name)).casefold()
 
@@ -202,9 +157,7 @@ _ALIAS_INDEX = {_key(alias): (canonical, rank)
 
 
 def detect_columns(columns, column_map=None):
-    """({canonical: [source columns, priority order]}, [unrecognised columns]).
-
-    An explicit catalog ``column_map`` entry outranks the generic aliases."""
+    """Match source columns to canonical names; also returns the columns that weren't recognised."""
     found, unrecognised = {}, []
     for column in columns:
         if column_map and column in column_map:
@@ -363,11 +316,7 @@ def _apply_symbol(out, result, symbol, file_name, infer_symbol_from_filename):
 
 
 def change_pct_mismatches(frame, tolerance=CHANGE_PCT_TOLERANCE):
-    """Rows whose supplied Change % differs from the change implied by consecutive
-    closes (same symbol, previous usable date) by more than ``tolerance`` points.
-
-    A data-consistency check only: it never replaces the analytical return.
-    """
+    """Rows whose Change % disagrees with the change between consecutive closes."""
     dates = parse_dates(frame["date"])
     close = parse_numbers(frame["close"])
     change = parse_numbers(frame["change_pct"])
@@ -382,8 +331,6 @@ def change_pct_mismatches(frame, tolerance=CHANGE_PCT_TOLERANCE):
     gap = (change.reindex(ordered.index) - implied).abs()
     return (gap > tolerance).reindex(frame.index, fill_value=False).astype(bool)
 
-
-# --- import entry point --------------------------------------------------------------------------
 
 @dataclass
 class ImportReport:
@@ -428,16 +375,8 @@ def load_csv_market_data(file_path, symbol=None, *, source_name=USER_CSV_SOURCE,
                          change_pct_tolerance=CHANGE_PCT_TOLERANCE):
     """Import a provider CSV/TSV/TXT file into canonical market data.
 
-    The delimiter (comma, tab, semicolon or pipe) is detected automatically, so
-    tab-separated rows pasted from a spreadsheet or web table work unchanged.
-
-    symbol: required when the file has no Symbol column (unless
-        ``infer_symbol_from_filename`` is True and the file name is exactly a symbol).
-    date_format: strptime format to use instead of detection, e.g. "%d/%m/%Y".
-    source_name: catalog entry describing the file's origin (default: unverified user upload).
-
-    Raises MarketDataImportError when the file cannot be imported at all;
-    row-level problems are reported in the result instead.
+    Raises MarketDataImportError if the file can't be read at all; problems in
+    individual rows are reported in the result instead.
     """
     path = Path(file_path)
     if path.suffix.lower() not in TEXT_SUFFIXES:

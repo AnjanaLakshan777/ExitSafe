@@ -1,10 +1,4 @@
-"""Tests for app.stress_testing.stress_engine (deterministic scenario stress tests).
-
-Expected values are computed independently of the engine: shocks and weights in
-plain arithmetic, standard deviations with statistics.stdev over returns rebuilt
-from the generated closes, ADTV with statistics.mean of turnover or close x
-volume, and historical VaR / CVaR with small reference implementations.
-"""
+"""Tests for the stress testing engine, with expected values worked out independently."""
 
 import math
 import statistics
@@ -92,7 +86,7 @@ def impacts(result):
     return result.symbol_impacts.set_index("symbol")
 
 
-# Important test: ABC 40% / XYZ 35% / LMN 25%, market -10%, then Banking -20% --------------------
+# Important test: ABC 40% / XYZ 35% / LMN 25%, market -10%, then Banking -20%
 
 def test_market_shock_on_sample_portfolio_then_banking(sample):
     market10 = run_market_stress_test(sample, W3, -0.10, portfolio_value=20_000_000)
@@ -112,7 +106,7 @@ def test_market_shock_on_sample_portfolio_then_banking(sample):
     assert combined.portfolio_loss_amount == pytest.approx(20_000_000 * 0.23)
 
 
-# 1-4. market shocks ---------------------------------------------------------------------------
+# Market shocks
 
 @pytest.mark.parametrize("shock", [-0.10, -0.20, -0.30])
 def test_market_shocks(shock):
@@ -154,7 +148,7 @@ def test_historical_mean_baseline():
         sum(WABC[s] * (means[s] - 0.10) for s in "ABC"), rel=1e-12)
 
 
-# 5-6. sector shocks ---------------------------------------------------------------------------
+# Sector shocks
 
 def test_sector_shock():
     mapping = {"A": "Banking", "B": "Plantations", "C": "Banking"}
@@ -177,7 +171,7 @@ def test_custom_sector_shock_any_sector_name_case_insensitive():
     assert "No holding is in sector Banking" in none_in_sector.warnings[0]
 
 
-# 7-8. volatility shocks -----------------------------------------------------------------------
+# Volatility shocks
 
 @pytest.mark.parametrize("k", [1.5, 2.0])
 def test_volatility_multiplier(k):
@@ -209,7 +203,7 @@ def test_volatility_needs_enough_history():
                                       min_observations=10).status == STATUS_OK
 
 
-# 9. liquidity shock --------------------------------------------------------------------------
+# Liquidity shock
 
 def test_liquidity_multiplier_half():
     result = run_liquidity_stress_test(DATA, WABC, 0.5, portfolio_value=1_000_000)
@@ -238,7 +232,7 @@ def test_liquidity_participation_rate_is_used():
     assert row["stressed_liquidation_days"] == pytest.approx(500_000 / (adtv * 0.5 * 0.25))
 
 
-# 10, 33. combined shocks, no double counting --------------------------------------------------
+# Combined shocks, no double counting
 
 def test_combined_market_and_sector_shock():
     mapping = {"A": "Banking", "B": "Banking", "C": "Hotels"}
@@ -279,7 +273,7 @@ def test_combined_with_volatility_and_liquidity():
     assert result.liquidity_impacts is not None
 
 
-# 11-17. portfolio impact ------------------------------------------------------------------------
+# Portfolio impact
 
 def test_portfolio_return_loss_amount_and_stressed_value():
     mapping = {"A": "Banking", "B": "Hotels", "C": "Banking"}
@@ -316,7 +310,7 @@ def test_largest_negative_contributor_and_most_exposed():
     assert result.most_exposed_holding == "C"
 
 
-# 18-21. optional and missing data -------------------------------------------------------------
+# Optional and missing data
 
 def test_portfolio_value_is_optional():
     result = run_market_stress_test(DATA, WABC, -0.10)
@@ -350,7 +344,7 @@ def test_missing_liquidity_data_is_undefined_with_status():
     assert result.most_exposed_holding is None
 
 
-# 22-24. validation ----------------------------------------------------------------------------
+# Validation
 
 @pytest.mark.parametrize("kwargs, message", [
     ({"market_shock": float("nan")}, "finite"),
@@ -412,7 +406,7 @@ def test_unknown_symbols():
         run_market_stress_test(DATA, {"A": 0.5, "ZZZ": 0.5}, -0.1)
 
 
-# 25-30. data handling ---------------------------------------------------------------------------
+# Data handling
 
 def test_invalid_rows_are_excluded_and_not_bridged():
     status = ["VALID"] * 26
@@ -476,7 +470,7 @@ def test_input_is_not_mutated():
     assert mapping == {"A": "Banking", "B": "Hotels", "C": "Banking"}
 
 
-# 31-32. historical risk metrics untouched; determinism -----------------------------------------
+# Historical risk metrics untouched; determinism
 
 def quantile_type7(values, p):
     x = sorted(values)
@@ -526,7 +520,7 @@ def test_run_stress_scenarios_skips_disabled_and_reports_unavailable():
     assert report.summary["portfolio_loss_amount"].isna().all()
 
 
-# 34-38. liquidity details -----------------------------------------------------------------------
+# Liquidity details
 
 def test_liquidity_shock_changes_liquidation_not_price():
     base = run_market_stress_test(DATA, WABC, -0.10, portfolio_value=1e6)

@@ -1,57 +1,7 @@
-"""Walk-forward backtesting of the ExitSafe allocation process (no look-ahead).
+"""Walk-forward backtest: train on past data, then test on the next unseen period.
 
-The backtest repeatedly TRAINS on the past and TESTS on the next unseen period.
-Past performance does not guarantee future performance, and results on the
-synthetic fixtures are not evidence about any real market.
-
-Timing convention (every rebalance)
-  calendar        the sorted dates on which any selected stock has a row
-  decision        after the close of the last training day D = calendar[k - 1]
-  training data   the ``training_window`` dates calendar[k - training_window .. k - 1]
-                  (strictly before the first test day; nothing later is passed on)
-  rebalance date  T = calendar[k], the first test day: positions are bought at D's
-                  close, so the first out-of-sample return is close(T) / close(D) - 1
-  test window     calendar[k .. k + test_window - 1]; the next rebalance is
-                  ``rebalance_frequency`` dates later (test_window <= rebalance_frequency;
-                  dates between a test window and the next rebalance are not invested
-                  or evaluated). Only complete test windows are used.
-
-Look-ahead prevention: weights, expected returns, covariance, CVaR, liquidity
-(ADTV for the liquidity constraint) and the minimum-history check come only from
-the training rows. The portfolio value used for the liquidity constraint is the
-strategy's own value at D. Out-of-sample returns are realized returns of the
-test dates only.
-
-Out-of-sample returns: a test day is evaluated only if EVERY selected stock (and
-the market index, when one is supplied) has a usable return covering the same
-period (the common-date alignment of app.analytics.covariance). Days that fail
-this are excluded, never zero-filled or bridged, and counted. Within a test
-window the positions are held without trading (buy-and-hold: weights drift with
-prices); the daily portfolio return is the value-weighted return of the
-holdings, and value_t = value_(t-1) * (1 + return_t).
-
-Strategies (same universe, training windows, rebalance dates and test days)
-  EXITSAFE_OPTIMIZED  app.portfolio.optimizer.optimize_portfolio on the training
-                      rows: risk_aversion * variance + cvar_weight * CVaR -
-                      return_weight * mean, min/max weight, optional liquidity limit
-  MEAN_VARIANCE       the same optimizer and inputs with cvar_weight = 0 and no
-                      liquidity constraint: risk_aversion * variance -
-                      return_weight * mean (a traditional mean-variance baseline)
-  EQUAL_WEIGHT        1 / N for every selected stock
-  MARKET_INDEX        the supplied index's returns on the same test days (no
-                      weights); UNAVAILABLE when no index is supplied or it shares
-                      no same-period dates
-  A rebalance whose training rows hold fewer than ``min_observations`` common
-  returns is skipped for every strategy; a strategy whose optimization fails is
-  recorded with the reason. In both cases existing positions are kept (no
-  trade); a strategy without positions is not invested, and the comparison
-  starts at the first test window in which every stock strategy is invested.
-
-Metrics (out-of-sample returns only, via the existing analytics modules on each
-strategy's value path): cumulative return, annualized arithmetic return (mean x
-P), annualized geometric return, annualized volatility, Sharpe and Sortino
-(app.analytics.ratios, explicit risk-free rate), maximum drawdown, historical
-VaR and CVaR. No transaction costs, slippage, taxes or fees are modelled.
+Weights are chosen after the close of the last training day using only the
+training rows, then held without trading until the next rebalance.
 """
 
 import math
@@ -268,11 +218,7 @@ def strategy_weights(strategy, training_data, config, portfolio_value):
 
 
 def run_strategy_backtest(data, strategy, config, windows=None, evaluable=None):
-    """Walk one stock strategy through the schedule. Returns a StrategyBacktest.
-
-    ``evaluable`` (date x symbol returns of the evaluable test days) defaults to
-    the common-date returns of the selected stocks.
-    """
+    """Run one stock strategy through every rebalance window."""
     if strategy not in STOCK_STRATEGIES:
         raise ValueError(f"Unknown stock strategy {strategy!r}")
     universe, _ = _universe(data, config)
@@ -389,10 +335,7 @@ def run_walk_forward_backtest(data, config, index_data=None, index_name=None):
 
 
 def create_equity_curve(returns, base_date):
-    """Normalized value paths: 1.0 on ``base_date``, then value_t = value_(t-1) * (1 + r_t).
-
-    ``returns`` is indexed by date with one column per strategy.
-    """
+    """Value paths that start at 1.0 on base_date."""
     values = (1 + returns).cumprod()
     start = pd.DataFrame(1.0, index=pd.DatetimeIndex([base_date]), columns=returns.columns)
     curve = pd.concat([start, values])
@@ -401,11 +344,7 @@ def create_equity_curve(returns, base_date):
 
 
 def calculate_backtest_metrics(returns, config, rebalances=None):
-    """Out-of-sample metrics of one daily return series (pd.Series indexed by date).
-
-    The series is turned into its value path (1.0 at a base row, then compounded)
-    and measured with the existing analytics modules, so no formula is duplicated.
-    """
+    """Performance metrics for one out-of-sample return series, using the existing analytics."""
     r = returns.dropna().astype("float64")
     n = len(r)
     if n == 0:
@@ -449,8 +388,7 @@ def _drawdowns(equity):
 
 
 def _index_returns(index_data, index_name, calendar):
-    """Index returns on stock calendar days whose previous index date is the previous
-    stock calendar date (same period); other days are left out."""
+    """Index returns covering the same period as the stock returns on each date."""
     series, _ = prepare_index_series(index_data, index_name)
     returns = calculate_daily_returns(series.rename(columns={"index_name": "symbol"}))
     returns["previous_date"] = returns["date"].shift(1)

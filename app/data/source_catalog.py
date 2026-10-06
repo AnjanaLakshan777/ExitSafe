@@ -1,9 +1,4 @@
-"""Catalog of the external data sources ExitSafe uses or plans to investigate.
-
-Each entry records what a source is, how far it can be trusted and whether it
-may be used to fill ExitSafe's canonical historical store. Descriptions only
-state what has been verified; anything not yet checked is marked as such.
-"""
+"""The external data sources ExitSafe uses or is looking into, and how far each can be trusted."""
 
 from dataclasses import dataclass, field
 from enum import StrEnum

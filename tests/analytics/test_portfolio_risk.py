@@ -1,16 +1,4 @@
-"""Tests for app.analytics.portfolio_risk (fixed, user-supplied weights).
-
-Expected values are computed independently of the module under test: the
-portfolio return series is rebuilt in plain Python from the returns used to
-generate the prices, covariance comes from statistics.covariance, quantiles
-and expected shortfall from small reference implementations below, and the
-Normal figures from statistics.NormalDist (not scipy).
-
-Worked example (two stocks, 60/40)
-  A returns: +2%, -1%, +3%      B returns: -1%, +2%, 0%
-  R_p = 0.6 * A + 0.4 * B   =   0.008, 0.002, 0.018
-  cumulative = 1.008 * 1.002 * 1.018 - 1 = 0.0281963...
-"""
+"""Tests for app.analytics.portfolio_risk. Expected values are rebuilt independently in plain Python."""
 
 import math
 import statistics
@@ -102,7 +90,7 @@ THREE = combine(market("A", RA), market("B", RB), market("C", RC))
 RETURNS = {"A": RA, "B": RB, "C": RC}
 
 
-# 1-5. portfolio shapes and the return series --------------------------------------------------------
+# Portfolio shapes and the return series
 
 def test_two_stock_return_series_worked_example():
     data = combine(market("A", [0.02, -0.01, 0.03]), market("B", [-0.01, 0.02, 0.0]))
@@ -156,7 +144,7 @@ def test_weights_accepted_as_table_or_pairs_and_symbols_trimmed():
         pd.testing.assert_frame_equal(calculate_portfolio_return_series(TWO, weights), expected)
 
 
-# 6-12. weight validation ----------------------------------------------------------------------------
+# Weight validation
 
 def test_weights_not_summing_to_one_raise_and_are_not_normalized():
     with pytest.raises(ValueError, match="sum to 1"):
@@ -231,7 +219,7 @@ def test_only_portfolio_symbols_participate():
     assert list(result.covariance.columns) == ["A", "B"]
 
 
-# 13-16. data handling -------------------------------------------------------------------------------
+# Data handling
 
 def test_unsorted_data_gives_the_same_result():
     shuffled = THREE.sample(frac=1, random_state=7).reset_index(drop=True)
@@ -300,7 +288,7 @@ def test_no_common_dates_gives_empty_series_and_nan():
     assert result.start_date is None and math.isnan(result.annualized_volatility)
 
 
-# 17-21. return, volatility and drawdown ------------------------------------------------------------
+# Return, volatility and drawdown
 
 def test_return_summary():
     weights = {"A": 0.5, "B": 0.3, "C": 0.2}
@@ -399,7 +387,7 @@ def test_drawdown_can_start_on_the_base_date():
     assert pd.isna(result.recovery_date)
 
 
-# 22-25. VaR / CVaR from the portfolio series --------------------------------------------------------
+# VaR / CVaR from the portfolio series
 
 WEIGHTS_ABC = {"A": 0.5, "B": 0.3, "C": 0.2}
 RP = expected_series(WEIGHTS_ABC, RETURNS)
@@ -467,7 +455,7 @@ def test_invalid_parameters_raise(kwargs):
         summary(THREE, WEIGHTS_ABC, **kwargs)
 
 
-# 26-27. concentration -------------------------------------------------------------------------------
+# Concentration
 
 def test_maximum_weight():
     assert summary(THREE, {"A": 0.2, "B": 0.45, "C": 0.35}).maximum_weight == 0.45
@@ -479,7 +467,7 @@ def test_hhi():
     assert summary(THREE, {"A": 0.25, "B": 0.25, "C": 0.5}).hhi == pytest.approx(0.375)
 
 
-# 28-31. liquidity -----------------------------------------------------------------------------------
+# Liquidity
 
 def test_portfolio_value_converts_to_position_values():
     result = summary(THREE, WEIGHTS_ABC, portfolio_value=20_000_000)
@@ -561,7 +549,7 @@ def test_zero_volume_holding_has_undefined_liquidation_days():
     assert result.most_illiquid_symbol == "A"
 
 
-# 32. no mutation; sample data -----------------------------------------------------------------------
+# No mutation; sample data
 
 def test_inputs_are_not_mutated():
     data = THREE.sample(frac=1, random_state=3).reset_index(drop=True)

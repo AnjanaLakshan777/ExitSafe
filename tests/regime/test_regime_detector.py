@@ -1,11 +1,7 @@
-"""Tests for app.regime.regime_detector (rule-based market regime, version 1).
+"""Tests for the market regime detector.
 
-Expected values never come from the module under test. ``reference`` below is
-an independent plain-Python implementation of the documented indicators and
-decision tree (statistics.stdev, max, mean over explicit windows), used to check
-whole regime series; boundary tests feed hand-made indicator rows to
-classify_market_regime with values exactly at, just below and just above each
-configurable threshold.
+A plain-Python reference implementation of the rules checks whole regime
+series, and hand-made rows test each threshold on both sides.
 """
 
 import math
@@ -141,7 +137,7 @@ def assert_matches_reference(result, ref):
         assert h[column].tolist() == pytest.approx(expected, rel=1e-9, abs=1e-15, nan_ok=True)
 
 
-# Important regime test: NORMAL -> HIGH_VOLATILITY -> STRESS -> RECOVERY -----------------------
+# Important regime test: NORMAL -> HIGH_VOLATILITY -> STRESS -> RECOVERY
 
 def test_regime_sequence_normal_high_volatility_stress_recovery():
     data = index_frame(SEQUENCE)
@@ -163,7 +159,7 @@ def test_regime_sequence_normal_high_volatility_stress_recovery():
     assert stress["volatility_state"] == "HIGH" and stress["current_drawdown"] <= -0.10
 
 
-# 1-7. market shapes --------------------------------------------------------------------------
+# Market shapes
 
 def test_normal_market():
     data = index_frame(CALM * 100)
@@ -227,7 +223,7 @@ def test_flat_market():
     assert current.volatility_state == "NORMAL" and current.current_drawdown == 0
 
 
-# 8. warm-up -------------------------------------------------------------------------------------
+# Warm-up
 
 def test_insufficient_warm_up_data_is_not_a_false_normal():
     assert required_observations() == REQUIRED == 141
@@ -253,7 +249,7 @@ def test_first_regime_appears_exactly_after_required_observations():
     assert required_observations(10, 30, 80, 20, 5) == 80
 
 
-# 9-12. data handling ----------------------------------------------------------------------------
+# Data handling
 
 def test_missing_dates_use_the_previous_available_close():
     data = index_frame(SEQUENCE[:220]).drop(index=[30, 31, 150]).reset_index(drop=True)
@@ -312,7 +308,7 @@ def test_string_dates_are_parsed_as_iso():
                                   detect_market_regime(data).history)
 
 
-# 13-15. invalid input -----------------------------------------------------------------------------
+# Invalid input
 
 def test_empty_input_fails():
     with pytest.raises(ValueError, match="empty"):
@@ -344,7 +340,7 @@ def test_duplicate_date_rows_fail_unless_marked_invalid():
     assert result.excluded_rows == 2 and result.observations == len(data) - 1
 
 
-# 16-19. parameter validation ----------------------------------------------------------------------
+# Parameter validation
 
 @pytest.mark.parametrize("kwargs", [
     {"volatility_window": 1}, {"volatility_window": 0}, {"volatility_window": 2.5},
@@ -398,7 +394,7 @@ def test_thresholds_must_be_a_regime_thresholds():
         detect_market_regime(index_frame(CALM * 5), thresholds={"neutral_band": 0.02})
 
 
-# 20-22. long history, priority, determinism ----------------------------------------------------
+# Long history, priority, determinism
 
 def test_multiple_years_of_data():
     rng = np.random.RandomState(7)
@@ -461,7 +457,7 @@ def test_deterministic_classification():
     assert first.current == second.current
 
 
-# Threshold transitions: both sides of every configurable threshold -----------------------------
+# Threshold transitions: both sides of every configurable threshold
 
 def test_trend_neutral_band_both_sides():
     band = T0.neutral_band
@@ -545,7 +541,7 @@ def test_recovery_lookback_both_sides():
     assert classify_market_regime(outside, t)["regime"].iloc[-1] == NORMAL
 
 
-# Index selection, outputs, no mutation ----------------------------------------------------------
+# Index selection, outputs, no mutation
 
 def test_index_selection_and_errors():
     data = pd.concat([index_frame(CALM * 75, "ASPI"),

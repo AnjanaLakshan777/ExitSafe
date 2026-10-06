@@ -32,7 +32,7 @@ def issues(result, row):
     return set(result.data.loc[row, "validation_warnings"].split(";")) - {""}
 
 
-# --- 1. the Date/Price/Open/High/Low/Vol./Change % format ---------------------------------
+# The Date/Price/Open/High/Low/Vol./Change % format
 
 def test_example_format_imports(tmp_path):
     path = write_csv(tmp_path,
@@ -63,7 +63,7 @@ def test_synthetic_fixture_imports_cleanly():
     assert list(result.data["volume"]) == [7_940_000, 9_190_000, 560_000, 8_510_000, 7_130_000]
 
 
-# --- 2-3. close column mapping -------------------------------------------------------------
+# Close column mapping
 
 def test_price_maps_to_close(tmp_path):
     result = load_csv_market_data(write_csv(tmp_path, "2025-12-31,660.09,664.75,665,659.44,100,"),
@@ -107,7 +107,7 @@ def test_conflicting_price_and_close_are_not_silently_resolved(tmp_path):
     assert "1 row(s) differ" in result.report.ignored_columns["Price"]
 
 
-# --- 4-7. volume parsing -------------------------------------------------------------------
+# Volume parsing
 
 @pytest.mark.parametrize("text, expected", [
     ("560K", "560000"),
@@ -153,7 +153,7 @@ def test_abbreviated_volume_precision_is_noted(tmp_path):
     assert any("K/M/B abbreviations" in note for note in result.report.notes)
 
 
-# --- 8-9. Change % ---------------------------------------------------------------------------
+# Change %
 
 def test_missing_change_column_is_allowed(tmp_path):
     path = write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,7.94M",
@@ -203,7 +203,7 @@ def test_bare_change_column_without_percent_sign_is_ignored(tmp_path):
     assert result.data["change_pct"].isna().all()
 
 
-# --- 10-11. symbol ---------------------------------------------------------------------------
+# Symbol
 
 def test_symbol_supplied_externally(tmp_path):
     result = load_csv_market_data(write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,100,"),
@@ -260,7 +260,7 @@ def test_symbol_is_not_guessed_from_a_descriptive_filename(tmp_path):
         load_csv_market_data(path, infer_symbol_from_filename=True)
 
 
-# --- 12-13. dates ----------------------------------------------------------------------------
+# Dates
 
 @pytest.mark.parametrize("values, expected, convention", [
     (["12/31/2025", "01/02/2025"], ["2025-12-31", "2025-01-02"], "MM/DD/YYYY"),
@@ -304,7 +304,7 @@ def test_impossible_and_unreadable_dates_are_invalid(tmp_path):
     assert "INVALID_DATE" in issues(result, 2)
 
 
-# --- 14-16. prices, volume, duplicates (shared validator) -------------------------------------
+# Prices, volume, duplicates (shared validator)
 
 @pytest.mark.parametrize("close, code", [("0", "NON_POSITIVE_CLOSE"), ("-5", "NON_POSITIVE_CLOSE"),
                                          ("abc", "INVALID_CLOSE"), ("", "MISSING_CLOSE")])
@@ -351,7 +351,7 @@ def test_missing_required_column_fails_without_data(tmp_path):
     assert result.validation.missing_columns == ["open", "high", "low", "volume"]
 
 
-# --- 17-18. traded value -----------------------------------------------------------------------
+# Traded value
 
 def test_estimated_traded_value_is_derived_and_marked(tmp_path):
     result = load_csv_market_data(write_csv(tmp_path, "12/31/2025,100.50,100,101,99,2K,"),
@@ -373,7 +373,7 @@ def test_reported_turnover_is_untouched(tmp_path):
     assert result.provenance.derived_fields == {}
 
 
-# --- 19-20. no mutation, provenance -----------------------------------------------------------
+# No mutation, provenance
 
 def test_file_and_dataframe_are_not_mutated(tmp_path):
     path = write_csv(tmp_path, "12/31/2025,660.09,664.75,665,659.44,7.94M,-0.88%")
@@ -412,7 +412,7 @@ def test_other_catalog_source_can_be_named(tmp_path):
     assert result.data.loc[0, "source"] == "exitsafe_sample"
 
 
-# --- other failures ----------------------------------------------------------------------------
+# Other failures
 
 def test_report_lists_columns_and_counts():
     report = load_csv_market_data(FIXTURE, symbol="T").report.to_dict()
@@ -437,7 +437,7 @@ def test_unrecognised_columns_are_reported(tmp_path):
     assert result.report.ignored_columns["Notes"] == "not a recognised market-data column"
 
 
-# --- delimiters (tab-separated data pasted from spreadsheets, etc.) -----------------------------
+# Delimiters (tab-separated data pasted from spreadsheets, etc.)
 
 TAB_ROWS = ("Date\tPrice\tOpen\tHigh\tLow\tVol.\tChange %\n"
             "12/31/2025\t101.20\t102.10\t102.40\t100.90\t7.94M\t-0.78%\n"

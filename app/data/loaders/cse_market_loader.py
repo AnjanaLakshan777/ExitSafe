@@ -1,11 +1,4 @@
-"""Load locally downloaded market-data files, exactly as the source delivered them.
-
-This loader performs no cleaning and no financial calculations. CSV cells are
-read as text with pandas' NA-guessing switched off, so the in-memory frame
-holds the file's literal values. Conversion to the canonical schema is a
-separate, explicit step (``to_canonical_dataset``) that flags problems
-instead of fixing them.
-"""
+"""Read downloaded market-data files exactly as delivered, without cleaning them."""
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -40,14 +33,10 @@ class CanonicalMarketData:
 
 def load_raw_market_file(file_path, source_name, retrieval_time=None, source_date=None,
                          source_url=None, source_version=None):
-    """Read a local delimited-text (CSV/TSV/TXT) or Parquet file and attach provenance.
+    """Read a CSV/TSV/TXT or Parquet file and record where it came from.
 
-    The delimiter of a text file (comma, tab, semicolon or pipe) is detected
-    from its header line, so data pasted from a spreadsheet works unchanged.
-
-    ``source_name`` must be registered in the source catalog, so every loaded
-    file is traceable to a documented source. ``source_date`` is only for a
-    file whose *content* states a single as-of date; never pass a requested date.
+    source_date is only for files that state their own as-of date; never pass the
+    date you asked for.
     """
     path = Path(file_path)
     if not path.is_file():
@@ -72,12 +61,7 @@ def load_raw_market_file(file_path, source_name, retrieval_time=None, source_dat
 
 
 def detect_delimiter(path):
-    """The delimiter used in a text file's header line (default ",").
-
-    Only the header is inspected: data rows can legitimately contain commas
-    (e.g. an unquoted "7,130,000" in tab-separated data). Characters inside
-    double quotes are ignored.
-    """
+    """Guess the delimiter from the header line only (data rows may contain commas)."""
     with open(path, encoding="utf-8-sig", errors="replace", newline="") as handle:
         header = handle.readline()
     counts = dict.fromkeys(DELIMITERS, 0)
@@ -92,12 +76,7 @@ def detect_delimiter(path):
 
 
 def to_canonical_dataset(raw, date_format="ISO8601"):
-    """Map, validate and convert a raw dataset to the canonical schema.
-
-    If the provenance states a ``source_date``, every row must carry that date
-    (the validator enforces it), so a current snapshot can never be filed
-    under a different day.
-    """
+    """Map, validate and convert a raw dataset to the canonical schema."""
     standardized = standardize_columns(raw.data, raw.source.column_map)
     validation = validate_market_data(standardized, expected_date=raw.provenance.source_date,
                                       date_format=date_format)

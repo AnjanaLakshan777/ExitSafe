@@ -1,9 +1,4 @@
-"""The investor-facing risk signal.
-
-A risk signal describes potential risk, its direction, scenario ranges and the
-evidence behind it. It deliberately has no "expected price" or "target" field:
-ExitSafe never states that an event *will* move a stock by X%.
-"""
+"""The risk signal shown to investors. It never contains a predicted price."""
 
 from dataclasses import dataclass
 from datetime import datetime

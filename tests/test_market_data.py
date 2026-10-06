@@ -16,7 +16,7 @@ def write_csv(tmp_path, *rows, header=HEADER):
     return path
 
 
-# --- Test 1: valid CSV ---------------------------------------------------------
+# Test 1: valid CSV
 
 def test_valid_csv_loads_successfully(tmp_path):
     path = write_csv(
@@ -57,7 +57,7 @@ def test_missing_file_raises(tmp_path):
         load_market_data(tmp_path / "does_not_exist.csv")
 
 
-# --- Test 2: missing required column -------------------------------------------
+# Test 2: missing required column
 
 def test_missing_required_column_raises(tmp_path):
     path = write_csv(
@@ -70,7 +70,7 @@ def test_missing_required_column_raises(tmp_path):
         load_market_data(path)
 
 
-# --- Test 3: invalid date ------------------------------------------------------
+# Test 3: invalid date
 
 def test_invalid_date_row_is_removed(tmp_path):
     path = write_csv(
@@ -87,7 +87,7 @@ def test_invalid_date_row_is_removed(tmp_path):
     assert data.loc[0, "Date"] == pd.Timestamp("2026-01-02")
 
 
-# --- Test 4: invalid prices ----------------------------------------------------
+# Test 4: invalid prices
 
 def test_invalid_prices_are_removed(tmp_path):
     path = write_csv(
@@ -120,7 +120,7 @@ def test_rows_missing_essential_data_are_removed(tmp_path):
     assert data[["Date", "Symbol", "Close"]].notna().all().all()
 
 
-# --- Test 5: duplicates --------------------------------------------------------
+# Test 5: duplicates
 
 def test_duplicate_stock_date_records_are_removed(tmp_path):
     path = write_csv(
@@ -138,7 +138,7 @@ def test_duplicate_stock_date_records_are_removed(tmp_path):
     assert abc["Close"] == 101  # the last record in the file is kept
 
 
-# --- Test 6: daily returns -----------------------------------------------------
+# Test 6: daily returns
 
 def test_daily_return_calculation():
     data = pd.DataFrame({

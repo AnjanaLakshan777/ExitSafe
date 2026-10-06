@@ -1,76 +1,8 @@
-"""Rule-based market-regime detection (version 1) from a market-index price series.
+"""Rule-based market regime (NORMAL, HIGH_VOLATILITY, STRESS, RECOVERY) from an index.
 
-Market regime describes the current market environment from three transparent
-signals: volatility, drawdown and trend. It does NOT predict future prices, and
-every threshold below is a configurable MODEL ASSUMPTION, not a market rule.
-
-Input: one index series, columns ``date``, ``index_name``, ``close`` (optional
-``validation_status``), e.g. from app.data.loaders.index_series_loader. The
-caller names the index (ASPI, S&P SL20, ...); a missing index is an error and
-no other index or stock is used in its place.
-
-Usable rows: a date, a finite positive close and not INVALID (WARNING rows
-count). Duplicate dates among usable rows raise ValueError. Daily returns come
-from app.analytics.returns.calculate_daily_returns, so a return is never formed
-across an INVALID row (no bridging); a missing calendar date simply is not
-there, and the next return runs from the previous available close.
-
-Indicators per usable date t (windows count usable observations)
-  rolling_volatility   sample std (ddof = 1) of the last ``volatility_window``
-                       daily returns (default 20); DAILY, not annualized
-  volatility_baseline  the same over the last ``baseline_window`` returns
-                       (default 100, includes the recent window)
-  volatility_ratio     rolling_volatility / volatility_baseline (NaN when the
-                       baseline has no variation, <= 1e-12: a flat market)
-  running_peak         highest close of the last ``drawdown_lookback`` closes
-                       (default 60), including t
-  current_drawdown     close / running_peak - 1   (<= 0)
-  moving_average       simple mean of the last ``trend_window`` closes (default 50)
-  trend_ratio          close / moving_average
-  A return missing because of an INVALID row is skipped by the volatility
-  windows (never filled with zero).
-
-States (RegimeThresholds; boundaries as written)
-  trend       UPTREND   trend_ratio > 1 + neutral_band            (default band 0.02)
-              DOWNTREND trend_ratio < 1 - neutral_band
-              NEUTRAL   otherwise
-  volatility  NORMAL    volatility_ratio <= elevated_volatility_ratio  (default 1.25),
-                        or no variation at all (flat market)
-              ELEVATED  elevated < volatility_ratio <= high_volatility_ratio (1.5)
-              HIGH      volatility_ratio > high_volatility_ratio
-              In a calm, unchanging market the ratio is about 1 by construction and
-              varies around it by sampling noise alone (a 20-return sample std has a
-              relative standard error of about 1 / sqrt(2 * 19) = 16%). A cut-off at
-              1.0 would call roughly half of all calm days elevated, so the default is
-              1.25 (about 1.5 standard errors above 1). It is an assumption to adjust.
-
-Regime decision tree (evaluated in this order; the first match wins)
-  1. N/A              any indicator, or one of the previous ``recovery_lookback``
-                      volatility states, is not yet defined (warm-up)
-  2. STRESS           volatility HIGH and (current_drawdown <= stress_drawdown
-                      (default -0.10) or trend_ratio <= strong_downtrend_ratio (0.95))
-  3. RECOVERY         recent_peak_volatility_ratio (max over the previous
-                      ``recovery_lookback`` = 40 observations) > elevated threshold,
-                      and volatility_ratio < that peak (falling), and volatility
-                      not HIGH, and trend not DOWNTREND (NEUTRAL or UPTREND: the
-                      decline has stopped), and current_drawdown <= recovery_drawdown
-                      (default -0.02: still at least 2% below the peak; closer than
-                      that the recovery counts as complete, so tiny dips just after a
-                      new peak do not flip the regime)
-  4. HIGH_VOLATILITY  volatility ELEVATED or HIGH
-  5. NORMAL           otherwise
-  STRESS and RECOVERY cannot both hold (HIGH vs not HIGH). RECOVERY is checked
-  before HIGH_VOLATILITY because a falling but still elevated volatility while
-  the market is no longer declining, below its peak, is the recovery phase the
-  rule describes. "Improving" means not DOWNTREND rather than UPTREND: right
-  after a fall the moving average still holds pre-fall prices, so the close
-  needs weeks to rise 2% above it and most of a rebound would otherwise be
-  missed. A stable decline with normal volatility is NORMAL with trend DOWNTREND.
-
-Warm-up: with no gaps a regime needs max(baseline_window + 1 + recovery_lookback,
-trend_window, drawdown_lookback) observations (100 + 1 + 40 = 141 with the
-defaults: the recovery rule must see its full lookback of defined volatility); earlier
-dates are N/A, never NORMAL. No confidence score is produced in version 1.
+It compares recent volatility with a longer baseline, looks at the drawdown from
+the recent peak and the trend against a moving average. The thresholds are
+model settings, and the regime describes the past; it doesn't predict prices.
 """
 
 import math
@@ -197,12 +129,7 @@ def calculate_regime_indicators(data, index_name=None,
 
 
 def classify_market_regime(indicators, thresholds=None):
-    """Add trend/volatility states and the regime to an indicator table (date order).
-
-    Needs the columns rolling_volatility, volatility_baseline, volatility_ratio,
-    current_drawdown and trend_ratio; returns a new frame with
-    CLASSIFICATION_COLUMNS added. The input is not modified.
-    """
+    """Add the trend state, volatility state and regime to an indicator table."""
     t = thresholds if thresholds is not None else RegimeThresholds()
     if not isinstance(t, RegimeThresholds):
         raise ValueError("thresholds must be a RegimeThresholds")
@@ -221,7 +148,7 @@ def classify_market_regime(indicators, thresholds=None):
         [flat, ratio.isna(), ratio <= t.elevated_volatility_ratio,
          ratio <= t.high_volatility_ratio],
         [VOLATILITY_NORMAL, UNDEFINED, VOLATILITY_NORMAL, VOLATILITY_ELEVATED], VOLATILITY_HIGH)
-    # previous recovery_lookback ratios; a flat (no-variation) day counts as 0, not elevated
+    # For the recovery check a flat day (no variation at all) counts as a ratio of 0.
     known = pd.Series(np.where(flat, 0.0, ratio), index=result.index).where(volatility != UNDEFINED)
     recent_peak = known.shift(1).rolling(t.recovery_lookback,
                                          min_periods=t.recovery_lookback).max()
@@ -317,7 +244,7 @@ def _indicators(data, index_name, volatility_window, baseline_window, trend_wind
     r = rows[CANONICAL_DAILY_RETURN].astype("float64")
     close = rows["close"].astype("float64")
 
-    defined = r.dropna()                     # gaps (INVALID) are skipped, never filled
+    defined = r.dropna()                     # skip gaps rather than filling them
     rolling = defined.rolling(volatility_window, min_periods=volatility_window).std(ddof=1)
     baseline = defined.rolling(baseline_window, min_periods=baseline_window).std(ddof=1)
     rolling = rolling.reindex(rows.index).ffill()
@@ -336,11 +263,7 @@ def _indicators(data, index_name, volatility_window, baseline_window, trend_wind
 
 
 def prepare_index_series(data, index_name=None):
-    """One index as date, index_name, close, validation_status (sorted by date).
-
-    Unusable rows (no date, a non-positive or missing close) are marked INVALID;
-    duplicate usable dates raise ValueError; a missing index is an error.
-    """
+    """Pick one index from the data and mark unusable rows INVALID."""
     if not isinstance(data, pd.DataFrame):
         raise ValueError("Index data must be a DataFrame with date, index_name and close")
     missing = [c for c in ("date", "index_name", "close") if c not in data.columns]

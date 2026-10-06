@@ -1,20 +1,11 @@
-"""Official CSE public-data discovery: what can actually be retrieved, and can it be trusted?
+"""Check what public CSE data can actually be retrieved, and how far it can be trusted.
 
     python scripts/cse_source_discovery.py            # full run (downloads ~200 MB of PDFs once)
     python scripts/cse_source_discovery.py --no-pdfs  # API probes only
 
-Only public, unauthenticated CSE endpoints (www.cse.lk/api, used by the CSE
-website itself) and files on the CSE CDN (cdn.cse.lk) are accessed. Endpoints
-that answer 401/417 are recorded as login-required and never retried with
-credentials. Requests are sequential with a delay between them.
-
-Raw evidence goes to data/raw/cse/discovery/ (not tracked in git). The
-structured result goes to data/processed/audit/cse_source_evidence.json.
-Nothing is written to canonical processed data.
-
-Historical-date rule: a record is only attributed to a date that the source
-payload itself states (report text, per-row trade date, per-point timestamp).
-A date we asked for is never assigned to a response.
+Only public CSE endpoints and CDN files are used; anything that needs a login is
+recorded and skipped. A record is only given a date that the source itself
+states - never the date we asked for.
 """
 
 import argparse
@@ -52,7 +43,7 @@ CHART_SAMPLE = ["JKH.N0000", "HNB.N0000", "HNB.X0000", "ACL.N0000", "HDFC.N0000"
 UNLISTED_TARGETS = [date(2026, 9, 15), date(2025, 12, 30), date(2024, 6, 28)]
 
 
-# --- HTTP with evidence -----------------------------------------------------------
+# HTTP with evidence
 
 class Session:
     def __init__(self, out_dir):
@@ -107,7 +98,7 @@ class Session:
         return entry, (path if response is not None and response.ok else None)
 
 
-# --- report parsing -----------------------------------------------------------------
+# Report parsing
 
 NUMBER = r"-?[\d,]+(?:\.\d+)?"  # some report columns contain negative values
 LISTING_DATE = re.compile(r"(\d{1,2})[-_/.](\d{1,2})[-_/.](\d{4})")  # titles use - or _
@@ -144,12 +135,7 @@ class ColumnBounds:
 
 
 def equity_rows_from_words(words, bounds):
-    """Rows of '02. Daily Movements on Equity' from pdfplumber words of one page.
-
-    A data row is a line containing a M/D/YYYY date. Company-name and industry
-    words that wrapped onto the line above/below are attached to the nearest
-    data row by vertical distance, using the header's column positions.
-    """
+    """Rows of the 'Daily Movements on Equity' table from the words on one PDF page."""
     lines = {}
     for word in words:
         lines.setdefault(round(word["top"]), []).append(word)
@@ -201,9 +187,8 @@ def _place(row, word, bounds, fragment=False):
             row["board"].append(word)
     elif x < bounds.type - 5:
         text = word["text"]
-        # A long name can touch the type column, fusing the type letter onto the
-        # last name word ("EQUIPMENTN"). Split it only if the word physically
-        # extends into the type column.
+        # A long name can run into the type column ("EQUIPMENTN"); split it only
+        # when the word really reaches that column.
         if (not fragment and row["type"] is None and word["x1"] > bounds.type - 1
                 and len(text) > 1 and text[-1] in "NXPUZ"):
             row["name"].append({**word, "text": text[:-1]})
@@ -298,7 +283,7 @@ def inspect_old_daily_report(path):
     return result
 
 
-# --- probes -----------------------------------------------------------------------
+# Probes
 
 def probe_listings(session):
     listings = {}
@@ -496,17 +481,13 @@ def probe_market_reviews(session):
             "example_titles": [i.get("title", "").strip() for i in items[:5]]}
 
 
-# --- canonical mapping, cross-checks and validation ---------------------------------------
+# Canonical mapping, cross-checks and validation
 
 def report_rows_to_canonical(parsed_reports):
-    """Canonical-named frame from the new-format reports.
+    """Canonical-named rows from the new-format daily reports.
 
-    date      = the report's own date, kept only for rows whose 'Date Last Traded'
-                equals it (rows with an older last-traded date did not trade that
-                day and are excluded as stale, never re-dated).
-    symbol    = short company name + share type as printed; the report has no
-                CSE symbol codes, so this is NOT a canonical symbol.
-    open, volume, trades: not in the report -> left empty.
+    Rows whose last-traded date isn't the report date didn't trade that day, so they
+    are dropped rather than re-dated. The report's names aren't CSE symbol codes.
     """
     frames, stale = [], 0
     for report_date, info in sorted(parsed_reports.items()):
@@ -525,13 +506,7 @@ def report_rows_to_canonical(parsed_reports):
 
 
 def chart_points_to_canonical(charts):
-    """Canonical-named frame from companyChartDataByStock points.
-
-    date = calendar date of the point timestamp 't' in Sri Lanka time (all 't'
-    values observed are exactly 00:00 SLT, i.e. a trade date). o and c are null
-    in every observed point, so open stays empty. q -> volume is supported by the
-    VWAP cross-check below; 's' is not mapped (meaning unknown).
-    """
+    """Canonical-named rows from companyChartDataByStock points (dated by each point's own timestamp)."""
     frames = []
     for symbol, record in charts.items():
         for p in record.get("points", []):
@@ -578,11 +553,7 @@ def cross_check_charts(charts, parsed_reports):
 
 
 def trade_summary_to_canonical(rows):
-    """Canonical-named frame from the current tradeSummary snapshot.
-
-    date = calendar date (SLT) of each row's own lastTradedTime. close =
-    closingPrice exactly as returned (0.0 while the session is open).
-    """
+    """Canonical-named rows from the current tradeSummary snapshot, dated by each row's last trade time."""
     return pd.DataFrame([{
         "date": _iso(_ms_date(r.get("lastTradedTime"))),
         "symbol": r.get("symbol"),
@@ -602,7 +573,7 @@ def validation_summary(frame, expected_date=None):
     return summary
 
 
-# --- decisions ------------------------------------------------------------------------
+# Decisions
 
 def decisions(evidence):
     charts = evidence["historical_files"]["per_stock_chart"]
@@ -681,7 +652,7 @@ def decisions(evidence):
     ]
 
 
-# --- main -----------------------------------------------------------------------------
+# Main
 
 def run(download_pdfs=True):
     DISCOVERY_DIR.mkdir(parents=True, exist_ok=True)
@@ -818,7 +789,7 @@ CANONICAL_MAPPING = {
 }
 
 
-# --- helpers ----------------------------------------------------------------------------
+# Helpers
 
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec="seconds")

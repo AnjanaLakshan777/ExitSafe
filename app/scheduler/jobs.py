@@ -1,10 +1,4 @@
-"""Periodic jobs.
-
-Jobs are plain functions plus a schedule. No scheduler library is wired in
-yet; whichever runner is chosen later only needs to iterate over ``JOBS``.
-The scheduler is the top of the dependency graph: it may call any domain, and
-no domain imports it.
-"""
+"""Periodic jobs. No scheduler library is wired in yet; a runner only needs to loop over JOBS."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -31,11 +25,7 @@ class Job:
 
 
 def collect_intelligence():
-    """Run every collector, then parse, classify and store new events.
-
-    Raw items go to INTELLIGENCE_RAW_DIR, normalized events to
-    INTELLIGENCE_PROCESSED_DIR (see app.config.paths).
-    """
+    """Run every collector, then parse, classify and store the new events."""
     raise NotImplementedError("Intelligence collection job is not implemented yet")
 
 

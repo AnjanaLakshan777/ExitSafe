@@ -1,40 +1,7 @@
-"""Stock-level liquidity: trading volume, traded value and position liquidation estimates.
+"""Stock liquidity: trading volume, traded value (ADTV) and time to sell a position.
 
-Liquidity describes how easily an investor can buy or sell a position without
-needing an unusually large share of the market's normal trading activity.
-
-Usable rows (per symbol; nothing is filled in or interpolated)
-  not INVALID (WARNING rows count), with a date, a symbol, a finite positive close
-  and a finite non-negative volume. Zero-volume days are valid observations: they
-  count as 0 in the averages and in ``zero_volume_days``. Missing trading days
-  simply do not appear; ``observations`` is the number of usable rows.
-
-Traded value: one source per symbol, never mixed
-  ACTUAL_TURNOVER         reported ``turnover``, used only if EVERY usable row of
-                          the symbol has a finite, non-negative turnover
-  ESTIMATED_TRADED_VALUE  otherwise close * volume for every usable row (the same
-                          definition as the canonical estimated_traded_value).
-                          This is an estimate, NOT official turnover. Reported
-                          turnover is never overwritten; ``actual_turnover_days``
-                          shows how many rows had it.
-
-Metrics
-  average_daily_volume (ADV)        mean(volume)
-  average_daily_traded_value (ADTV) mean(daily traded value from the chosen source)
-  zero_volume_rate                  zero_volume_days / observations
-  plus median/min/max daily volume and median daily traded value
-
-Position liquidity (each symbol evaluated separately; not a portfolio)
-  position_to_adtv            = position_value / ADTV
-  daily_executable_value      = ADTV * participation_rate
-  estimated_liquidation_days  = position_value / daily_executable_value
-  The participation rate (default 10%) is an ASSUMPTION about how much of the
-  typical daily traded value the investor would trade, not a market rule, and
-  the result is a simplified estimate, not an execution guarantee. ADTV of zero
-  or unavailable gives NaN (never infinity).
-
-No liquidity score or HIGH/LOW classification is produced: any thresholds would
-be arbitrary at this stage. Values are full precision.
+Reported turnover is used when every day has it; otherwise traded value is
+estimated as close x volume. The participation rate is an assumption.
 """
 
 import math
@@ -71,10 +38,7 @@ def calculate_liquidity_summary(data):
 
 def calculate_position_liquidity(data, position_value,
                                  participation_rate=DEFAULT_PARTICIPATION_RATE):
-    """Liquidation estimate for a position of ``position_value`` in each symbol.
-
-    Columns: POSITION_COLUMNS. See the module docstring for the formulas.
-    """
+    """Days needed to sell a position of the given size in each stock."""
     validate_position_value(position_value)
     validate_participation_rate(participation_rate)
     summary = calculate_liquidity_summary(data)

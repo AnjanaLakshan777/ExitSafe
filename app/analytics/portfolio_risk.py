@@ -1,39 +1,7 @@
-"""Portfolio risk for user-supplied, fixed weights (no optimization).
+"""Risk of a portfolio with fixed weights chosen by the user.
 
-Portfolio risk considers how the holdings behave TOGETHER, so stock-level
-measures are never weighted and added: volatility comes from the covariance
-matrix, and drawdown, VaR and CVaR come from the portfolio's own return series.
-
-Weights
-  {symbol: weight}, a DataFrame with ``symbol`` and ``weight`` columns, or
-  (symbol, weight) pairs. Every weight must be finite and >= 0 (no short
-  selling), symbols must be unique and present in the data, and the weights
-  must sum to 1 within WEIGHT_SUM_TOLERANCE. Nothing is normalized.
-
-Common-date alignment
-  Returns come from app.analytics.covariance.calculate_aligned_return_matrix:
-  a date is used only if every holding (with weight > 0) has a usable return
-  covering the same period. INVALID rows are never bridged; missing returns are
-  never filled with zero. Zero-weight holdings are listed but do not restrict
-  the dates.
-
-Formulas (P = periods_per_year, default 252; w = weights; R_i(t) daily returns)
-  portfolio return        R_p(t) = sum_i w_i * R_i(t)
-  cumulative return       prod(1 + R_p) - 1
-  annualized arithmetic   mean(R_p) * P
-  annualized geometric    (1 + cumulative) ** (P / n) - 1
-  daily variance          w' Sigma_daily w        (calculate_covariance_matrix)
-  daily volatility        sqrt(w' Sigma w);  annualized: sqrt(w' Sigma w * P)
-  drawdown                value path starting at 1.0 on the base date (the close
-                          before the first common return), V(t) = V(t-1) * (1 + R_p(t));
-                          same peak/trough/recovery rules as stock drawdown
-  VaR / CVaR              historical and parametric, from the R_p sample itself,
-                          same conventions as the stock-level modules
-  concentration           maximum weight; HHI = sum(w_i ** 2)
-
-Statistics need at least 2 common observations (otherwise NaN); VaR/CVaR need
-``min_observations`` (default 20). These are historical, sample-based figures
-for a portfolio held at constant weights over the period, not forecasts.
+Volatility comes from the covariance matrix and VaR/CVaR from the portfolio's
+own return series, so the way the stocks move together is taken into account.
 """
 
 import math
@@ -240,8 +208,7 @@ def _holdings_liquidity(data, weights, portfolio_value, participation_rate):
     for symbol, weight in weights.items():
         holding = data[data["symbol"] == symbol]
         position = portfolio_value * weight
-        # Existing stock-level formulas. A zero weight has nothing to sell: 0 when
-        # ADTV is defined, NaN when it is not (as for any position).
+        # A zero weight has nothing to sell: 0 days if ADTV is known, otherwise NaN.
         liquidity = calculate_position_liquidity(holding, position if weight > 0 else 1.0,
                                                  participation_rate).iloc[0]
         ratio, days = liquidity["position_to_adtv"], liquidity["estimated_liquidation_days"]

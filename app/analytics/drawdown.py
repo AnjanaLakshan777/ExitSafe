@@ -1,25 +1,4 @@
-"""Drawdown and maximum drawdown per symbol, from closing prices.
-
-running_peak(t) = max(close_1 ... close_t)          per symbol, chronological
-drawdown(t)     = close_t / running_peak(t) - 1      (0 at a peak, negative below it)
-maximum drawdown = min over t of drawdown(t)          (a loss measure: <= 0)
-
-Each symbol is calculated independently. Only usable rows count: rows marked
-INVALID are left out (WARNING rows are kept), as are rows without a date,
-symbol or a finite positive close. Nothing is filled in: a missing day is
-simply absent, and an excluded row is neither a peak nor a trough.
-
-Maximum drawdown event (chronological, never min/max taken independently)
-  trough   date of the lowest drawdown (the earliest one if tied)
-  peak     the last date at or before the trough on which the close equalled
-           the running peak at the trough, i.e. where that decline started
-  recovery first date after the trough with close >= the peak price; NaT if
-           the price has not recovered by the end of the data
-
-Fewer than 2 usable prices gives NaN (a drawdown needs a price to fall from).
-With no decline at all the maximum drawdown is 0 and there is no event, so the
-peak/trough/recovery fields are empty. Values are full precision.
-"""
+"""Drawdown and maximum drawdown from closing prices, one stock at a time."""
 
 import numpy as np
 import pandas as pd
@@ -33,11 +12,7 @@ _INVALID = "INVALID"
 
 
 def calculate_drawdown_series(data):
-    """Per-row running peak and drawdown, sorted by symbol and date.
-
-    Output columns: date, symbol, close, running_peak, drawdown. Only usable
-    rows appear (see module docstring). The input is not modified.
-    """
+    """Running peak and drawdown for every usable row."""
     prices = _usable_prices(data, "drawdown")
     peaks = prices.groupby("symbol", sort=False)["close"].cummax()
     prices["running_peak"] = peaks
@@ -46,12 +21,7 @@ def calculate_drawdown_series(data):
 
 
 def calculate_maximum_drawdown(data):
-    """One row per symbol (sorted) describing its maximum drawdown event.
-
-    Columns: symbol, observations (usable prices), maximum_drawdown (<= 0, NaN
-    if fewer than 2 prices), peak_date, peak_price, trough_date, trough_price,
-    recovery_date (NaT if not recovered or if there was no decline).
-    """
+    """The worst peak-to-trough fall of each stock, with its dates."""
     series = calculate_drawdown_series(data)
     rows = []
     for symbol, group in series.groupby("symbol", sort=True):
@@ -72,10 +42,7 @@ def calculate_maximum_drawdown(data):
 
 
 def drawdown_path(dates, values):
-    """Chronological path of one value series: date, value, running_peak, drawdown.
-
-    ``values`` are prices or any value index (e.g. a portfolio value starting at 1.0).
-    """
+    """Running peak and drawdown for one series of values (prices or a portfolio value)."""
     path = pd.DataFrame({"date": list(dates), "value": np.asarray(values, dtype="float64")})
     path["running_peak"] = path["value"].cummax()
     path["drawdown"] = path["value"] / path["running_peak"] - 1
@@ -83,12 +50,7 @@ def drawdown_path(dates, values):
 
 
 def maximum_drawdown_event(path):
-    """The maximum drawdown event of a path (columns date, value, running_peak, drawdown,
-    in date order, index 0..n-1), using the rules in the module docstring.
-
-    Returns a dict: observations, maximum_drawdown, peak_date, peak_value,
-    trough_date, trough_value, recovery_date.
-    """
+    """Find the deepest drawdown in a path and its peak, trough and recovery dates."""
     event = {"observations": len(path), "maximum_drawdown": np.nan, "peak_date": pd.NaT,
              "peak_value": np.nan, "trough_date": pd.NaT, "trough_value": np.nan,
              "recovery_date": pd.NaT}

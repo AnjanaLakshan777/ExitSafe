@@ -1,10 +1,7 @@
-"""Tests for app.backtesting.backtest_engine (walk-forward backtest, no look-ahead).
+"""Tests for the walk-forward backtest, including the look-ahead checks.
 
-Expected values never come from the engine: the schedule is rebuilt by
-indexing the calendar, equal-weight buy-and-hold returns are simulated in plain
-Python from the closes, metrics use statistics / exact fractions, and the
-expected optimizer weights come from calling app.portfolio.optimizer directly
-on the training rows only. The data is synthetic test data.
+Expected values are rebuilt independently (plain-Python buy-and-hold, direct
+optimizer calls on the training rows). The data is synthetic.
 """
 
 import math
@@ -125,7 +122,7 @@ def log_for(res, strategy):
     return [r for r in res.rebalances if r.strategy == strategy]
 
 
-# 1-8. walk-forward schedule and timing -------------------------------------------------------
+# Walk-forward schedule and timing
 
 def test_walk_forward_ordering_and_window_sizes(result):
     cfg = config()
@@ -182,7 +179,7 @@ def test_test_window_shorter_than_rebalance_frequency_leaves_gaps():
     assert not set(gap) & set(dates) and res.observations == 5 * len(res.windows)
 
 
-# 25-28. critical look-ahead tests ---------------------------------------------------------------
+# Critical look-ahead tests
 
 def test_critical_future_returns_cannot_change_past_weights():
     cut = 80                                       # day index where the future starts
@@ -272,7 +269,7 @@ def test_strategy_fairness_same_universe_windows_and_dates(result):
     assert not returns[["ExitSafe", "EqualWeight", "MeanVariance"]].isna().any().any()
 
 
-# 9-14. strategies and benchmarks ---------------------------------------------------------------
+# Strategies and benchmarks
 
 def test_equal_weight_strategy_returns(result):
     expected = equal_weight_reference(DATA, config(), CALENDAR)
@@ -344,7 +341,7 @@ def test_missing_market_index_is_unavailable(result):
         run_walk_forward_backtest(DATA, config(), index_frame(), "S&P SL20")
 
 
-# 15-23. data problems -------------------------------------------------------------------------
+# Data problems
 
 def test_missing_selected_symbol():
     with pytest.raises(ValueError, match="not found in the market data: ZZZ"):
@@ -418,7 +415,7 @@ def test_missing_dates():
     assert res.observations == 78
 
 
-# 24-33. returns, value path and metrics -------------------------------------------------------
+# Returns, value path and metrics
 
 def test_portfolio_value_path_and_initial_capital(result):
     expected = equal_weight_reference(DATA, config(), CALENDAR)
@@ -487,7 +484,7 @@ def test_create_equity_curve():
     assert curve["date"].tolist() == CALENDAR[:3]
 
 
-# 34-44. log, comparison, failures, determinism, mutation, config -------------------------------
+# Log, comparison, failures, determinism, mutation, config
 
 def test_rebalance_log(result):
     log = result.rebalance_log
@@ -579,7 +576,7 @@ def test_config_is_required():
         run_walk_forward_backtest(DATA, {"symbols": SYMBOLS})
 
 
-# synthetic fixture -------------------------------------------------------------------------
+# Synthetic fixture
 
 def test_synthetic_fixture_runs_a_multi_window_backtest():
     data = load_csv_market_data(FIXTURE).data

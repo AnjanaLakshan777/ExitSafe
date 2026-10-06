@@ -1,12 +1,9 @@
-"""Download the secondary (research) datasets at pinned revisions.
+"""Download the secondary research datasets at pinned revisions.
 
     python scripts/fetch_secondary_datasets.py
 
-Files go to data/raw/external/huggingface/<owner>__<name>/ (not tracked in
-git) together with a SOURCE.json recording the URL, revision, licence,
-retrieval time and SHA-256 of every file, which the audit script uses for
-provenance. These are plain downloads of published dataset files; nothing is
-scraped.
+Files go to data/raw/external/huggingface/ (not tracked in git) with a
+SOURCE.json recording where each one came from.
 """
 
 import hashlib

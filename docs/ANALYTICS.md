@@ -19,6 +19,7 @@ and return new results at full precision. Rounding belongs to presentation.
 | 11 | Market regime, rule-based (`app/regime/regime_detector.py`) | implemented |
 | 12 | Stress testing, scenario-based (`app/stress_testing/stress_engine.py`) | implemented |
 | 13 | Walk-forward backtesting (`app/backtesting/backtest_engine.py`) | implemented |
+| 14 | Exit Safety Engine, version 1 (`app/exit_engine/exit_safety.py`) | implemented |
 
 ## 1. Daily returns
 
@@ -1572,3 +1573,187 @@ invented stocks over 321 weekdays.
    those days are not counted.
 8. **No regime-aware optimization,** and no event/news signals.
 9. **No guarantee:** past performance does not guarantee future performance.
+
+## 14. Exit Safety Engine (version 1)
+
+**Purpose.** It answers one question: *"Can I reasonably exit a requested
+amount from this portfolio under the current quantitative conditions?"*
+- **What it is:** a **quantitative decision-support assessment**.
+- **What it is not:** a guarantee of execution, price or future return. It is
+  not investment advice, and SAFE does not guarantee that an exit will
+  succeed.
+- **What it reuses:** it combines the existing modules and recomputes none of
+  them:
+  - weights (section 9)
+  - liquidity (section 8)
+  - VaR/CVaR (section 9)
+  - stress testing (section 12)
+  - market regime (section 11)
+
+```python
+from app.exit_engine.exit_safety import ExitSafetyPolicy, assess_exit_safety
+
+result = assess_exit_safety(data, {"ABC": 0.40, "XYZ": 0.35, "LMN": 0.25},
+                            portfolio_value=20_000_000, target_exit_value=5_000_000,
+                            participation_rate=0.10, stress_scenario="Market -10%",
+                            liquidity_stress_multiplier=None, policy=ExitSafetyPolicy(),
+                            index_data=index, index_name="ASPI")
+result.overall_status        # SAFE / CAUTION / AT_RISK / INSUFFICIENT_DATA
+result.reason_text           # why
+result.holdings_table()      # the holding exit plan
+```
+
+**Inputs.**
+- **Portfolio:** weights in the portfolio-risk format (long-only, summing to 1)
+  and `portfolio_value`.
+- **Target:** `target_exit_value`, the amount to raise. It is distinct from the
+  portfolio value, and remaining_portfolio_value = portfolio_value − target.
+- **Rejected inputs:** a target ≤ 0, above the portfolio value or not finite
+  raises a clear `ValueError`. So do invalid or duplicate weights, a missing
+  symbol, an unknown stress scenario and an invalid policy.
+
+**Exit allocation: the version 1 assumption.** The exit is proportional, with
+no liquidation ordering.
+
+```
+holding_value_i      = portfolio_value × w_i
+planned_exit_value_i = target_exit_value × w_i        (sums to the target)
+```
+
+The most liquid or least liquid stock is **not** sold first, and the order is
+not optimized.
+
+**Liquidity per holding.** Each holding uses `calculate_position_liquidity`
+with its planned exit amount.
+
+```
+exit_value_to_adtv_i  = planned_exit_value_i / ADTV_i
+estimated_exit_days_i = planned_exit_value_i / (ADTV_i × participation_rate)
+```
+
+- **ADTV source:** reported turnover when every usable day has it. Otherwise it
+  is the close × volume **estimate**, labelled as such.
+- **Missing data:** if ADTV is zero or unavailable, the days are NaN (never
+  infinity) and the status is `NO_LIQUIDITY_DATA`.
+- **Zero weight:** a zero-weight holding has nothing to exit (`NO_EXIT`).
+
+**Estimated exit horizon under proportional parallel liquidation.** The
+horizon is the **maximum** of the holding exit days that have usable data.
+- **Why the maximum:** holdings are sold side by side, so the horizon is
+  neither the sum nor the average.
+- **Not a guarantee:** it is a planning metric, not an execution time.
+
+**Coverage**
+- **Formulas:**
+  - covered_exit_value = planned exits of the holdings with usable ADTV
+  - uncovered_exit_value = target − covered
+  - coverage_ratio = covered / target
+- **When coverage is below 1:** the result carries `LIQUIDITY_DATA_INCOMPLETE`
+  and names the affected holdings. The horizon then covers only the other
+  holdings, which is stated, never hidden.
+
+**Optional liquidity stress** (for example Liquidity −50%).
+- **Reused calculation:** the stress engine's liquidity scenario is run with
+  positions equal to the planned exits, giving stressed exit days = exit /
+  (ADTV × m × participation).
+- **Prices are not changed.**
+- **What is assessed:** when the stress is applied, the **stressed** horizon is
+  assessed, as the conservative choice, and both horizons are shown.
+
+**Tail risk (reported, not recalculated).** Historical and parametric 1-day VaR
+and CVaR come from `calculate_portfolio_risk_summary`.
+- **Reference CVaR loss:** target × CVaR is shown as the *"Reference 1-day CVaR
+  loss magnitude on target-exit amount"*.
+- **What it is not:** it is a proportional 1-day reference, **not** a forecast
+  of the loss while exiting, and it is not an "expected liquidation loss".
+- **Which CVaR the policy uses:** the historical one by default
+  (`cvar_measure`).
+
+**Stress scenario.** One price scenario is chosen (default Market −10%; also
+−20%, −30%, High Volatility 1.5x and 2.0x).
+- **Shown:** the scenario's portfolio return, its loss and the loss amount.
+- **Reference stress loss:** target × scenario loss is the *"Reference stress
+  loss on target-exit amount"*.
+- **Not a forecast:** it is a hypothetical reference, not a guaranteed loss.
+
+**Market regime (context only).** The current regime, trend, drawdown and
+rolling volatility come from `detect_market_regime` on the supplied index.
+- **Unavailable:** without an index, in warm-up, or when the name is unknown,
+  it is `REGIME_DATA_UNAVAILABLE`. It is never guessed.
+- **No effect on the status:** the regime is listed in the reasons and **never
+  changes the status**. STRESS or HIGH_VOLATILITY is not turned into AT_RISK,
+  and there is no hidden penalty.
+
+**Policy** (`ExitSafetyPolicy`). These are initial model settings, **not
+financial standards**, and can be changed without code changes.
+
+| Parameter | Default |
+|---|---|
+| `max_safe_exit_days` / `max_caution_exit_days` | 5 / 20 trading days |
+| `cvar_caution_threshold` / `cvar_risk_threshold` | 5% / 10% (1-day CVaR) |
+| `stress_caution_threshold` / `stress_risk_threshold` | 10% / 20% scenario loss |
+| `coverage_minimum` | 100% (below it: CAUTION) |
+| `insufficient_coverage_ratio` | 50% (below it: INSUFFICIENT_DATA) |
+| `cvar_measure` | historical (or parametric) |
+
+**Decision tree** (first match wins)
+
+| # | Status | Condition |
+|---|---|---|
+| 1 | **INSUFFICIENT_DATA** | coverage_ratio < `insufficient_coverage_ratio`, or no holding has usable liquidity data, or the policy's CVaR is unavailable (fewer than `min_observations` returns), or the stress scenario is unavailable |
+| 2 | **AT_RISK** | exit horizon > `max_caution_exit_days`, or CVaR ≥ `cvar_risk_threshold`, or stress loss ≥ `stress_risk_threshold` |
+| 3 | **CAUTION** | exit horizon > `max_safe_exit_days`, or CVaR ≥ `cvar_caution_threshold`, or stress loss ≥ `stress_caution_threshold`, or coverage_ratio < `coverage_minimum` |
+| 4 | **SAFE** | otherwise |
+
+- **Invalid inputs are errors, not statuses.** A target out of range or invalid
+  weights raise errors rather than returning INSUFFICIENT_DATA.
+- **The default scenario floors every result at CAUTION.** With a zero base
+  return, a Market −10% shock gives a loss of exactly 10% for any fully
+  invested long-only portfolio. The default caution rule is loss ≥ 10%, so the
+  default settings classify every portfolio as at least **CAUTION**. To reach
+  SAFE under that scenario, raise `stress_caution_threshold` or choose a
+  volatility scenario, which is portfolio-specific.
+
+**Reasons.** Every reason names a calculated metric and its threshold. Each one
+has a factor (LIQUIDITY, COVERAGE, TAIL_RISK, STRESS, REGIME, …) and a level.
+The informational reasons cover:
+- the reference amounts
+- the regime
+- the liquidity stress
+- the exit-plan assumption
+- market impact: *"Not modelled in the current Exit Safety version."* No
+  market-impact number is ever produced.
+
+**Example** (three-stock sample, ABC 40% / XYZ 35% / LMN 25%, Rs. 20,000,000,
+exit Rs. 5,000,000, 10% participation)
+
+| Holding | Planned exit (Rs.) | ADTV (Rs.) | Exit / ADTV | Exit days |
+|---|---|---|---|---|
+| ABC | 2,000,000 | 17,316,021 | 0.116 | 1.2 |
+| XYZ | 1,750,000 | 2,983,350 | 0.587 | 5.9 |
+| LMN | 1,250,000 | 794,034 | 1.574 | **15.7** (sets the horizon) |
+
+- **Defaults:** **CAUTION**. The horizon of 15.7 days is above 5, and the Market
+  −10% loss of 10% is ≥ 10%. Historical CVaR is 2.83% (OK), and the reference
+  CVaR loss is Rs. 141,307.
+- **Policy with 20/40 days and stress thresholds of 15/25%:** **SAFE**.
+- **Market −30%:** **AT_RISK**.
+- **Liquidity −50%:** **AT_RISK**, because the horizon rises to 31.5 days.
+- **Minimum Observations 30:** **INSUFFICIENT_DATA**, because only 24 returns
+  are available, so CVaR is unavailable.
+
+**Limitations:**
+1. **Proportional liquidation only:** there is no optimized liquidation order.
+2. **No market-microstructure modelling:**
+   - no bid/ask spread or order-book depth
+   - no market-impact model
+   - no transaction costs or slippage
+   - no intraday execution
+3. **Assumed participation:** the participation rate is an assumption, and ADTV
+   may be estimated from close × volume.
+4. **Data limits:** history is short and prices are unadjusted.
+5. **No event intelligence yet:** current events are not considered.
+6. **No scenario probabilities:** no probability is assigned to the stress
+   scenarios.
+7. **SAFE is not a guarantee:** it does not guarantee execution, price or
+   future return.

@@ -1,51 +1,8 @@
-"""Deterministic, scenario-based stress testing of a fixed-weight portfolio.
+"""Scenario stress tests for a fixed-weight portfolio.
 
-Stress testing asks what could happen to the portfolio under a HYPOTHETICAL
-adverse scenario. Scenarios are model assumptions, not forecasts: no
-probability is attached to them and they are not calibrated to historical
-events. The source data is never modified.
-
-Portfolio: the same weights as app.analytics.portfolio_risk (validate_weights:
-{symbol: weight}, a symbol/weight table or pairs; long-only, summing to 1, never
-normalized). Optional ``portfolio_value`` V turns returns into amounts.
-
-Shock convention: ABSOLUTE RETURN SHOCKS, added to a base return (never a
-multiplicative change of prices, never applied to the historical data):
-
-  stressed_return_i = base_return_i
-                      + market_shock                       (every holding)
-                      + sector_shock   if sector_i == sector_name (case-insensitive)
-                      - volatility_multiplier * sigma_i    (volatility scenarios)
-
-  base_return_i   BASELINE_ZERO (default): 0, so the scenario return is the shock
-                  itself, independent of recent daily moves;
-                  BASELINE_HISTORICAL_MEAN: mean daily return on the portfolio's
-                  common dates (as in portfolio risk)
-  sigma_i         daily sample standard deviation (ddof = 1) of holding i on the
-                  same common dates; needs ``min_observations`` (default 20)
-  A volatility scenario moves every holding down by k of its OWN daily standard
-  deviations on the same day, i.e. as if the holdings were perfectly correlated
-  (no diversification): a hypothetical adverse day, not a forecast.
-
-Portfolio impact (from the stressed portfolio return, never an average)
-  portfolio_return         R = sum_i w_i * stressed_return_i   ("scenario return")
-  portfolio_loss           -R (not clamped: a gain shows as a negative loss)
-  stress_contribution_i    w_i * stressed_return_i  (they add up to R)
-  with V: portfolio_loss_amount = V * portfolio_loss,
-          stressed_portfolio_value = V * (1 + R)
-
-Liquidity shock (needs V; prices are NOT changed by it)
-  ADTV from app.analytics.liquidity (reported turnover when every usable day has
-  it, else the close x volume estimate; zero-volume days count as 0)
-  stressed_ADTV = ADTV * liquidity_multiplier         (0 < m <= 1)
-  position_i = V * w_i; position / ADTV and liquidation days = position /
-  (ADTV * participation_rate), base and stressed. ADTV 0 or unavailable -> NaN
-  with a status, never invented.
-
-Each scenario component appears at most once (one field each in StressScenario)
-and its type must match the components it sets, so combined scenarios cannot
-double count by accident. Historical VaR/CVaR are reported next to the scenario
-loss by run_stress_scenarios, unchanged; a scenario loss is not a "stressed CVaR".
+A scenario adds simple shocks (market, sector, volatility) to each holding's
+return, or reduces trading capacity. Results are hypothetical: no probability
+is attached to any scenario.
 """
 
 import math
@@ -214,12 +171,7 @@ class StressReport:
 def run_stress_scenario(data, weights, scenario, portfolio_value=None, sector_mapping=None,
                         participation_rate=DEFAULT_PARTICIPATION_RATE, baseline=BASELINE_ZERO,
                         min_observations=DEFAULT_MIN_OBSERVATIONS):
-    """Apply one StressScenario to the portfolio. Returns a StressResult.
-
-    Invalid inputs raise ValueError. Missing optional data (sector mapping,
-    return history, portfolio value for a liquidity shock) gives an UNAVAILABLE
-    result with a clear message instead.
-    """
+    """Apply one scenario to the portfolio. Missing optional data gives an UNAVAILABLE result."""
     if not isinstance(scenario, StressScenario):
         raise ValueError("scenario must be a StressScenario")
     weights, value = _validate_inputs(data, weights, portfolio_value, participation_rate,
@@ -276,7 +228,7 @@ def run_stress_scenario(data, weights, scenario, portfolio_value=None, sector_ma
                      "stress_contribution": weights[s] * stressed})
     impacts = pd.DataFrame(rows, columns=SYMBOL_IMPACT_COLUMNS)
     portfolio_return = float(impacts["stress_contribution"].sum())
-    portfolio_loss = 0.0 - portfolio_return            # 0.0 - x avoids a "-0.0" loss
+    portfolio_loss = 0.0 - portfolio_return            # avoids showing a -0.0 loss
 
     warnings = []
     if scenario.sector_shock is not None and not any(

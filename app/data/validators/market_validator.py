@@ -1,25 +1,7 @@
-"""Validate market data against the canonical schema, without repairing anything.
+"""Validate market data without repairing it.
 
-Input is a DataFrame whose columns already use canonical names (see
-``standardize_columns``). Values may still be raw text. Each row gets a status
-(VALID / WARNING / INVALID) and a list of issue codes; the dataset gets an
-overall PASS / WARNING / FAIL.
-
-Row issue codes
-  errors   MISSING_<COL>, INVALID_<COL> (unparseable), INVALID_DATE,
-           NON_POSITIVE_<PRICE>, LOW_ABOVE_OPEN, HIGH_BELOW_OPEN, HIGH_BELOW_LOW,
-           NEGATIVE_VOLUME / _TURNOVER / _TRADES, DUPLICATE_SYMBOL_DATE,
-           DATE_MISMATCH (row date differs from the source's stated date)
-  warnings CLOSE_OUTSIDE_HIGH_LOW, ZERO_VOLUME_WITH_PRICE_RANGE, NON_INTEGER_VOLUME
-           (shares trade in whole units; fractions suggest adjusted or derived
-           data), WEEKEND_DATE
-
-A close outside the day's high-low range is only a warning: the CSE's official
-closing price can legitimately fall outside the traded range for thinly traded
-securities (see docs/CSE_DATA_DISCOVERY.md).
-
-Importers may add their own row checks through ``extra_errors`` /
-``extra_warnings`` so that every rule ends up in one validation result.
+Each row is marked VALID, WARNING or INVALID with the issues found, and the
+file as a whole gets PASS, WARNING or FAIL.
 """
 
 from dataclasses import dataclass, field
@@ -106,12 +88,8 @@ def validate_market_data(data, expected_date=None, date_format="ISO8601",
                          extra_errors=None, extra_warnings=None):
     """Validate canonical-named market data.
 
-    expected_date: the as-of date the *source* states for this file (e.g. a
-        daily snapshot). Every row must carry exactly this date; otherwise the
-        row is DATE_MISMATCH and the dataset FAILs. Never pass a date you
-        requested - only one the source payload itself declares.
-    extra_errors / extra_warnings: {issue_code: boolean mask aligned to data}
-        for importer-specific row checks (e.g. AMBIGUOUS_DATE).
+    expected_date is the date the source itself states for the file, never the
+    date you requested.
     """
     total = len(data)
     notes = _column_notes(data)

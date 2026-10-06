@@ -33,7 +33,7 @@ def make_event(**overrides):
     return MarketEvent(**values)
 
 
-# --- valid creation -------------------------------------------------------------
+# Valid creation
 
 def test_minimal_event_has_unassessed_defaults():
     event = make_event()
@@ -74,7 +74,7 @@ def test_events_are_immutable_and_replace_revalidates():
         replace(event, confidence=2.0)
 
 
-# --- required fields ------------------------------------------------------------
+# Required fields
 
 @pytest.mark.parametrize("field", ["event_id", "title", "source_name"])
 @pytest.mark.parametrize("value", ["", "   ", None])
@@ -93,7 +93,7 @@ def test_blank_symbol_is_rejected():
         make_event(symbol="  ")
 
 
-# --- event type / source type / status -----------------------------------------
+# Event type / source type / status
 
 @pytest.mark.parametrize("bad_type", ["NOT_A_TYPE", "DATA_BREACH", None, 3])
 def test_event_type_must_be_an_event_type(bad_type):
@@ -133,7 +133,7 @@ def test_official_source_can_confirm_an_event(source_type):
     assert event.verification_status is VerificationStatus.CONFIRMED
 
 
-# --- timestamps -----------------------------------------------------------------
+# Timestamps
 
 @pytest.mark.parametrize("field", ["published_time", "detected_time", "event_time"])
 def test_naive_timestamps_are_rejected(field):
@@ -168,7 +168,7 @@ def test_future_event_time_is_allowed():
     assert event.event_time > event.published_time
 
 
-# --- confidence and severity ----------------------------------------------------
+# Confidence and severity
 
 @pytest.mark.parametrize("value", [0, 0.0, 0.35, 1, 1.0])
 def test_confidence_within_range_is_accepted(value):
@@ -198,7 +198,7 @@ def test_invalid_severity_is_rejected(value):
         make_event(severity=value)
 
 
-# --- serialization --------------------------------------------------------------
+# Serialization
 
 def test_event_round_trips_through_json():
     event = make_event(
@@ -238,7 +238,7 @@ def test_from_dict_applies_the_same_validation():
         MarketEvent.from_dict(data)
 
 
-# --- ids, raw items, evidence ---------------------------------------------------
+# Ids, raw items, evidence
 
 def test_event_id_is_deterministic():
     first = make_event_id("Example News", PUBLISHED, source_url="https://x.example/a")

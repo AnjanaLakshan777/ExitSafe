@@ -1,19 +1,4 @@
-"""Tests for app.analytics.cvar (stock-level 1-day CVaR / Expected Shortfall).
-
-Expected values are independent of the module under test:
-  * historical: exact rational arithmetic (fractions.Fraction) in ``es_exact``
-  * parametric: statistics.mean / stdev and statistics.NormalDist (inv_cdf, pdf),
-    not scipy
-
-Worked example: R30 (30 synthetic returns), 95% -> alpha = 0.05
-  tail mass m = 30 * 0.05 = 1.5 -> k = 1 full observation, fraction f = 0.5
-  worst losses: 0.05 (weight 1), 0.04 (weight 0.5)
-  historical CVaR = (0.05 + 0.5 * 0.04) / 1.5 = 0.07 / 1.5 = 0.0466666...
-  NOT the plain average of the worst two, (0.05 + 0.04) / 2 = 0.045
-  mean = -0.0036666..., sample sd = 0.0202677..., z_0.05 = -1.6448536...,
-  phi(z_0.05) = 0.1031356...
-  parametric CVaR = -(mean - sd * phi(z) / alpha) = 0.0454732...
-"""
+"""Tests for app.analytics.cvar. Expected values use exact fractions and statistics.NormalDist, not the module itself."""
 
 import math
 import statistics
@@ -74,7 +59,7 @@ def row(data, symbol="ABC", **kwargs):
     return calculate_cvar_summary(data, **kwargs).set_index("symbol").loc[symbol]
 
 
-# 1-4, 32. worked example and tail mass --------------------------------------------------------------
+# Worked example and tail mass
 
 def test_historical_cvar_known_example_with_fractional_tail():
     result = row(prices("ABC", R30))
@@ -111,7 +96,7 @@ def test_tail_mass_is_alpha_times_n_without_float_noise(n, expected_mass):
     assert row(prices("ABC", returns))["tail_mass"] == expected_mass
 
 
-# 7-10. integer vs fractional tails ------------------------------------------------------------------
+# Integer vs fractional tails
 
 def test_exact_integer_tail_mass():
     # 20 returns at 95%: m = 1 -> the single worst loss
@@ -149,7 +134,7 @@ def test_helper_averages_the_worst_probability_mass():
     # m = 2: worst two losses 0.04 and 0.02 -> 0.03
 
 
-# 5-6. validation (shared with VaR) ---------------------------------------------------------------------
+# Validation (shared with VaR)
 
 @pytest.mark.parametrize("bad", [0, 1, -0.5, 1.5, 95, float("nan"), float("inf"), "0.95", None, True])
 def test_invalid_confidence_levels(bad):
@@ -163,7 +148,7 @@ def test_minimum_observation_validation(bad):
         calculate_cvar_summary(prices("ABC", R30), min_observations=bad)
 
 
-# 11-17. parametric ingredients and VaR relationship ------------------------------------------------------
+# Parametric ingredients and VaR relationship
 
 def test_parametric_cvar_uses_sample_mean_and_sample_sd():
     result = row(prices("ABC", R30))
@@ -207,7 +192,7 @@ def test_cvar_is_at_least_var(confidence):
         assert result["parametric_cvar"] >= result["parametric_var"] - 1e-12
 
 
-# 18-19. symbols and ordering ---------------------------------------------------------------------------------
+# Symbols and ordering
 
 def test_multiple_symbols_are_independent():
     other = [r * 0.5 + 0.001 for r in R30]
@@ -226,7 +211,7 @@ def test_unsorted_data_is_handled():
     assert row(data)["historical_cvar"] == pytest.approx(0.07 / 1.5, rel=1e-9)
 
 
-# 20-23. validation status and non-finite returns -----------------------------------------------------------------
+# Validation status and non-finite returns
 
 def test_invalid_rows_are_excluded_and_not_bridged():
     data = prices("ABC", R30, status="VALID")
@@ -264,7 +249,7 @@ def test_rows_without_date_symbol_or_close_do_not_enter():
     assert result["historical_cvar"] == pytest.approx(0.07 / 1.5, rel=1e-9)
 
 
-# 24-26. insufficient data, constant returns, empty input ----------------------------------------------------------------
+# Insufficient data, constant returns, empty input
 
 @pytest.mark.parametrize("returns", [[], [0.01], R20[:19]])
 def test_insufficient_observations_give_nan_not_zero(returns):
@@ -297,7 +282,7 @@ def test_empty_input_is_handled():
     assert list(calculate_parametric_cvar(empty).columns) == PARAMETRIC_COLUMNS
 
 
-# 27-31. columns, mutation, sign conventions ------------------------------------------------------------------------------
+# Columns, mutation, sign conventions
 
 @pytest.mark.parametrize("dropped", ["date", "symbol", "close"])
 def test_missing_columns_fail_clearly(dropped):
@@ -347,7 +332,7 @@ def test_tail_mass_rounding_constant_is_documented():
     assert cvar_module.TAIL_MASS_DECIMALS == 9
 
 
-# end-to-end: 3-symbol sample through the CSV importer ------------------------------------------------------------------------
+# End-to-end: 3-symbol sample through the CSV importer
 
 def test_three_symbol_sample_through_csv_importer():
     canonical = load_csv_market_data(SAMPLE_3_SYMBOLS).data

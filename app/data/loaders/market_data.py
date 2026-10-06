@@ -1,8 +1,6 @@
-"""Load and clean daily market data from a CSV file.
+"""Load and clean a daily market-data CSV (the original Phase 1 loader).
 
-The loader is deliberately strict: rows that cannot be trusted for later
-calculations (returns, liquidity, risk) are removed rather than guessed at,
-and every removal is logged so data problems stay visible.
+Rows that can't be trusted are dropped, and every removal is logged.
 """
 
 import logging
@@ -32,27 +30,16 @@ ESSENTIAL_COLUMNS = [DATE, SYMBOL, CLOSE]
 def load_market_data(file_path):
     """Load a market-data CSV and return a clean DataFrame.
 
-    Cleaning steps, in order:
-      1. Validate that all required columns are present.
-      2. Parse ``Date`` (ISO format, e.g. 2026-01-02); unparseable dates become missing.
-      3. Parse numeric columns (thousands separators allowed); junk becomes missing.
-      4. Drop rows missing any essential field (Date, Symbol, Close).
-      5. Drop rows with a zero/negative price or a negative Volume / Value Traded.
-      6. Sort by Symbol and Date.
-      7. Drop duplicate Symbol/Date rows, keeping the last one in the file
-         (a later row is treated as a correction of an earlier one).
-
-    Raises:
-        FileNotFoundError: if ``file_path`` does not exist.
-        ValueError: if the file is empty or required columns are missing.
+    Drops rows with missing essentials, bad prices or negative volumes, and keeps
+    the last copy of duplicate Symbol/Date rows. Raises FileNotFoundError or
+    ValueError if the file can't be used.
     """
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"Market data file not found: {path}")
 
     try:
-        # Read everything as text so each column is converted explicitly below,
-        # instead of relying on pandas' type inference.
+        # Read as text and convert each column explicitly below.
         raw = pd.read_csv(path, dtype=str, skipinitialspace=True)
     except pd.errors.EmptyDataError as exc:
         raise ValueError(f"Market data file is empty: {path}") from exc
@@ -111,8 +98,7 @@ def _drop_invalid_values(data):
 
 
 def _sort_and_deduplicate(data):
-    # A stable sort keeps duplicates in file order, so keep="last" keeps the
-    # row that appeared last in the file.
+    # The sort is stable, so keep="last" keeps the row that came last in the file.
     data = data.sort_values([SYMBOL, DATE], kind="stable")
     duplicated = data.duplicated(subset=[SYMBOL, DATE], keep="last")
     _log_dropped(duplicated, "duplicate Symbol/Date record")

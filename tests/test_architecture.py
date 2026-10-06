@@ -1,14 +1,8 @@
-"""Guard the modular-monolith boundaries.
+"""Guard the module boundaries.
 
-Allowed dependency direction (left may never import right):
-
-    data  ->  analytics  ->  intelligence  ->  recommendation  ->  scheduler
-
-Market data and financial analytics must stay usable without any
-intelligence, recommendation or scheduling code. Portfolio construction
-(app.portfolio), market-regime detection (app.regime), stress testing
-(app.stress_testing) and backtesting (app.backtesting) build on analytics, so
-data and analytics never import them.
+data -> analytics -> intelligence -> recommendation -> scheduler: a module may
+only import from the left. Data and analytics also never import the portfolio,
+regime, stress testing, backtesting or exit engine packages built on top of them.
 """
 
 import ast
@@ -21,9 +15,11 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 FORBIDDEN_IMPORTS = {
     "data": ["app.analytics", "app.portfolio", "app.regime", "app.stress_testing",
-             "app.backtesting", "app.intelligence", "app.recommendation", "app.scheduler"],
+             "app.backtesting", "app.exit_engine", "app.intelligence", "app.recommendation",
+             "app.scheduler"],
     "analytics": ["app.portfolio", "app.regime", "app.stress_testing", "app.backtesting",
-                  "app.intelligence", "app.recommendation", "app.scheduler"],
+                  "app.exit_engine", "app.intelligence", "app.recommendation",
+                  "app.scheduler"],
     "intelligence": ["app.recommendation", "app.scheduler"],
     "recommendation": ["app.scheduler"],
 }

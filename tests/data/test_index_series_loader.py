@@ -1,4 +1,4 @@
-"""Tests for app.data.loaders.index_series_loader (market-index price series)."""
+"""Tests for the market-index file loader."""
 
 from pathlib import Path
 

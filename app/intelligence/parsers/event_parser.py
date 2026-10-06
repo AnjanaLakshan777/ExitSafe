@@ -12,11 +12,7 @@ from app.data.schemas.event_schema import (
 
 
 def initial_status(source_type):
-    """Verification status an event starts with, based only on its source.
-
-    Official sources confirm, credible news reports, everything else
-    (threat-intel claims, search results, unknown sources) is unverified.
-    """
+    """Starting verification status of an event, based on its source."""
     if source_type in OFFICIAL_SOURCE_TYPES:
         return VerificationStatus.CONFIRMED
     if source_type is SourceType.NEWS:
@@ -25,12 +21,7 @@ def initial_status(source_type):
 
 
 def find_mentioned_symbols(text, company_directory):
-    """Return the sorted symbols whose company names/aliases appear in ``text``.
-
-    ``company_directory`` maps symbol -> list of names, e.g.
-    ``{"ABC": ["ABC Bank PLC", "ABC Bank"]}``. Matching is case-insensitive
-    on whole words.
-    """
+    """Symbols whose company names or aliases appear in the text."""
     found = set()
     for symbol, names in company_directory.items():
         for name in names:

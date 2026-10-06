@@ -1,9 +1,6 @@
-"""ExitSafe - Analytics Test Console (manual verification only, not the final dashboard).
+"""ExitSafe analytics test console, for manual checks (not the final dashboard).
 
-    streamlit run app/ui/streamlit_app.py
-
-A thin presentation layer: every calculation comes from the data and analytics
-layers via app.ui.console.
+Run with: streamlit run app/ui/streamlit_app.py
 """
 
 import sys
@@ -24,6 +21,8 @@ from app.ui.console import (  # noqa: E402
     BASELINE_LABELS,
     DEFAULT_SCENARIOS,
     EXAMPLE_FILE_NAME,
+    EXIT_STATUS_LABELS,
+    EXIT_STRESS_SCENARIOS,
     INDEX_SAMPLE_CSV,
     KNOWN_INDEXES,
     MULTI_SYMBOL_SAMPLE_CSV,
@@ -42,6 +41,9 @@ from app.ui.console import (  # noqa: E402
     cvar_display,
     default_holdings_text,
     drawdown_chart_data,
+    exit_plan_display,
+    exit_safety,
+    exit_summary_display,
     format_percent,
     import_summary,
     load_index_data,
@@ -156,6 +158,8 @@ def main():
     index_data, index_name = show_market_regime()
     show_stress_testing(outcome, holdings, value, confidence, minimum, participation)
     show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name)
+    show_exit_safety(outcome, holdings, value, participation, confidence, minimum, periods,
+                     index_data, index_name)
 
 
 def show_import(result):
@@ -838,6 +842,87 @@ def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, 
             "bias.\n"
             "- **Past performance does not guarantee future performance.** The comparison "
             "shows numbers only; it does not say which strategy to use.")
+
+
+def show_exit_safety(outcome, holdings, portfolio_value, participation, confidence, minimum,
+                     periods, index_data, index_name):
+    st.divider()
+    st.subheader("Exit Safety Assessment")
+    st.caption("Can the requested amount reasonably be exited under the current quantitative "
+               "conditions? A decision-support assessment, not a guarantee of execution, price "
+               "or future return.")
+    if holdings is None:
+        st.info("Enter valid holdings in Portfolio Risk Analysis to assess an exit.")
+        return
+
+    left, right = st.columns(2)
+    target = left.number_input("Target Exit Amount (Rs.)", value=5_000_000.0, step=500_000.0,
+                               min_value=0.0, format="%.2f")
+    scenario = right.selectbox("Stress Scenario", EXIT_STRESS_SCENARIOS)
+    liquidity_stress = st.checkbox("Apply Liquidity -50% (half the trading capacity)")
+    with st.expander("Policy settings (model assumptions)"):
+        first, second = st.columns(2)
+        policy = {
+            "max_safe_exit_days": first.number_input("Safe exit horizon (days)", value=5.0,
+                                                     step=1.0, min_value=0.1),
+            "max_caution_exit_days": second.number_input("Caution exit horizon (days)",
+                                                         value=20.0, step=1.0, min_value=0.1),
+            "cvar_caution_percent": first.number_input("CVaR caution (%)", value=5.0, step=0.5,
+                                                       min_value=0.01),
+            "cvar_risk_percent": second.number_input("CVaR at-risk (%)", value=10.0, step=0.5,
+                                                     min_value=0.01),
+            "stress_caution_percent": first.number_input("Stress loss caution (%)", value=10.0,
+                                                         step=1.0, min_value=0.01),
+            "stress_risk_percent": second.number_input("Stress loss at-risk (%)", value=20.0,
+                                                       step=1.0, min_value=0.01),
+            "coverage_minimum_percent": first.number_input("Minimum liquidity coverage (%)",
+                                                           value=100.0, step=5.0,
+                                                           min_value=0.01, max_value=100.0),
+            "insufficient_coverage_percent": second.number_input(
+                "Insufficient data below coverage (%)", value=50.0, step=5.0, min_value=0.0,
+                max_value=100.0),
+            "cvar_measure": st.selectbox("CVaR used by the policy", ["historical", "parametric"]),
+        }
+    st.caption(f"Uses Portfolio Value Rs. {portfolio_value:,.2f} and the holdings from Portfolio "
+               f"Risk Analysis, a {participation:g}% participation rate (Liquidity Analysis), "
+               f"{confidence:g}% confidence and the market index from Market Regime "
+               f"({index_name or 'none loaded'}).")
+
+    result, error = exit_safety(outcome.import_result.data, holdings, portfolio_value, target,
+                                participation, scenario, liquidity_stress, policy, confidence,
+                                minimum, periods, index_data, index_name)
+    if error:
+        st.error(error)
+        return
+    label = EXIT_STATUS_LABELS[result.overall_status]
+    show_status = {"SAFE": st.success, "CAUTION": st.warning, "AT_RISK": st.error,
+                   "INSUFFICIENT_DATA": st.info}[result.overall_status]
+    show_status(f"Decision-support assessment: **{label}**")
+    st.table(exit_summary_display(result).astype(str))
+
+    st.markdown("**Holding Exit Plan** (proportional exit, holdings sold in parallel)")
+    st.table(exit_plan_display(result).astype(str))
+    st.markdown("**Why?**")
+    st.markdown("\n".join(f"- **{r.level.replace('_', ' ')}** ({r.factor.lower()}): {r.message}"
+                          for r in result.reasons))
+
+    with st.expander("How is the exit assessed?"):
+        st.markdown(
+            "- The target is split across holdings in proportion to their weights, and the "
+            "holdings are sold in parallel at the participation rate. Each holding needs "
+            "planned exit ÷ (ADTV × participation rate) trading days.\n"
+            "- **Estimated Exit Horizon** is the longest of those times (holdings run in "
+            "parallel, so they are not added up). It is a planning estimate, not a guaranteed "
+            "exit time.\n"
+            "- **Liquidity Coverage** is the share of the target with usable trading data; "
+            "holdings without it are listed, never ignored.\n"
+            "- **Reference CVaR Loss** is target × portfolio CVaR: a 1-day reference, not the "
+            "loss expected while exiting. **Hypothetical Stress Loss** comes from the chosen "
+            "scenario, not a prediction.\n"
+            "- The market regime is shown as context and does not change the status. Market "
+            "impact, spreads and transaction costs are not modelled.\n"
+            "- The thresholds are configurable model settings, not financial standards. SAFE "
+            "does not guarantee execution.")
 
 
 if __name__ == "__main__":

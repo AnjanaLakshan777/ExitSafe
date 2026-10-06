@@ -1,20 +1,8 @@
-"""Generate tests/fixtures/synthetic_backtest_data.csv: SYNTHETIC stocks for backtests.
+"""Generate tests/fixtures/synthetic_backtest_data.csv: four made-up stocks for backtests.
 
-TEST DATA ONLY. The four symbols (ALPHA, BRAVO, CHARLIE, DELTA) are invented,
-and the prices, volumes and turnover come from a fixed random seed. The
-results of backtests on this file are not evidence about any real market or
-strategy.
-
-Each stock's daily return is  beta * market return + mean + noise,  where the
-market return is the SYNTHETIC "ASPI" series in data/sample/sample_index_data.csv
-(same 321 weekdays from 2025-01-01), so the stocks have differing returns,
-volatility and correlation, and the sample index can serve as the benchmark.
-
-  ALPHA    beta 1.0, moderate noise, liquid, reported turnover
-  BRAVO    beta 0.6, low noise (defensive), liquid, reported turnover
-  CHARLIE  beta 1.4, high noise, higher drift, mid liquidity, NO turnover column
-           values (the importer estimates traded value as close x volume)
-  DELTA    beta 0.3, high noise, illiquid with zero-volume days (price unchanged)
+Each stock follows the synthetic ASPI index with its own beta and noise, so they
+differ in return, volatility, correlation and liquidity. Test data only - the
+results say nothing about a real market.
 
     python scripts/generate_synthetic_backtest_data.py
 """

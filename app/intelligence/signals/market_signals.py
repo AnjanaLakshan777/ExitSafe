@@ -1,10 +1,4 @@
-"""Market signals around an event: how is the stock actually trading?
-
-This is the intelligence domain's read-only view of market data. It consumes
-DataFrames produced by ``app.data.loaders.market_data.load_market_data`` and
-``app.analytics.returns.calculate_daily_returns``; it never loads or cleans
-market data itself.
-"""
+"""How a stock is actually trading around an event (a read-only view of market data)."""
 
 from dataclasses import dataclass
 from datetime import date

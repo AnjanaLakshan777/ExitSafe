@@ -1,18 +1,4 @@
-"""Tests for app.analytics.liquidity.
-
-Expected values are computed independently (exact fractions / plain Python),
-never with the module under test.
-
-Worked example (from the brief), stock ABC, no reported turnover
-  closes 100, 102, 101; volumes 1,000,000, 1,200,000, 800,000
-  ADV = 3,000,000 / 3 = 1,000,000
-  estimated traded values: 100,000,000; 122,400,000; 80,800,000
-  estimated ADTV = 303,200,000 / 3 = 101,066,666.666...
-  position Rs. 20,000,000 at 10% participation:
-    position / ADTV            = 20,000,000 / 101,066,666.67 = 0.1978891820...
-    daily executable value     = 101,066,666.67 * 0.10       = 10,106,666.666...
-    estimated liquidation days = 20,000,000 / 10,106,666.67  = 1.978891820...
-"""
+"""Tests for app.analytics.liquidity. Expected values are worked out by hand with exact fractions."""
 
 import math
 import statistics
@@ -59,7 +45,7 @@ def position(data, value, rate=0.10, symbol="ABC"):
     return calculate_position_liquidity(data, value, rate).set_index("symbol").loc[symbol]
 
 
-# worked example: ADV, estimated ADTV, position metrics -------------------------------------------
+# Worked example: ADV, estimated ADTV, position metrics
 
 def test_worked_example_adv_and_estimated_adtv():
     result = row(market("ABC", CLOSES, VOLUMES))
@@ -87,7 +73,7 @@ def test_descriptive_statistics():
     assert result["end_date"] == pd.Timestamp("2026-01-07")
 
 
-# actual vs estimated -------------------------------------------------------------------------------
+# Actual vs estimated
 
 def test_actual_turnover_is_used_when_every_row_has_it():
     turnover = [99_000_000, 125_000_000, 80_000_000]          # differs from close * volume
@@ -134,7 +120,7 @@ def test_source_is_decided_per_symbol():
     assert summary.loc["XYZ", "traded_value_source"] == ESTIMATED_TRADED_VALUE
 
 
-# zero-volume handling -----------------------------------------------------------------------------------
+# Zero-volume handling
 
 def test_zero_volume_days_are_counted_and_averaged_as_zero():
     result = row(market("ABC", [100, 100, 101, 101], [1_000, 0, 3_000, 0]))
@@ -160,7 +146,7 @@ def test_zero_adtv_from_reported_turnover_gives_nan():
     assert not np.isinf(result["position_to_adtv"])
 
 
-# position size and participation -------------------------------------------------------------------------
+# Position size and participation
 
 def test_very_large_and_small_positions():
     data = market("ABC", CLOSES, VOLUMES)
@@ -191,7 +177,7 @@ def test_invalid_position_value(bad):
         calculate_position_liquidity(market("ABC", CLOSES, VOLUMES), bad)
 
 
-# symbols, ordering, gaps ------------------------------------------------------------------------------------
+# Symbols, ordering, gaps
 
 def test_multiple_symbols_are_never_mixed():
     data = pd.concat([market("ABC", CLOSES, VOLUMES),
@@ -214,7 +200,7 @@ def test_unsorted_dates_and_gaps_are_not_filled():
     assert result["end_date"] == pd.Timestamp("2026-01-20")
 
 
-# invalid data --------------------------------------------------------------------------------------------------
+# Invalid data
 
 def test_invalid_rows_do_not_contribute():
     data = market("ABC", CLOSES + [100], VOLUMES + [999_000_000],
@@ -253,7 +239,7 @@ def test_validated_duplicates_are_invalid_and_excluded():
     assert result["average_daily_volume"] == 1_000_000            # (1.2M + 0.8M) / 2
 
 
-# empty input, columns, mutation -------------------------------------------------------------------------------
+# Empty input, columns, mutation
 
 def test_empty_input():
     empty = market("ABC", CLOSES, VOLUMES).iloc[0:0]
@@ -276,7 +262,7 @@ def test_input_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# end-to-end: 3-symbol sample (reports actual turnover) via the CSV importer -----------------------------------------
+# End-to-end: 3-symbol sample (reports actual turnover) via the CSV importer
 
 def test_three_symbol_sample_uses_actual_turnover():
     canonical = load_csv_market_data(SAMPLE_3_SYMBOLS).data

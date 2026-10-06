@@ -1,12 +1,6 @@
-"""Collect financial news articles.
+"""Collect financial news from reputable outlets, within their terms of use.
 
-Intended sources: reputable financial news outlets via their public RSS feeds
-or licensed APIs, respecting each site's terms of use and robots.txt.
-Items are returned with ``SourceType.NEWS``; a news report is a *reported
-claim*, never a confirmed fact on its own.
-
-Implements the ``Collector`` contract in app.intelligence.models.
-Not implemented yet: no network access exists in this phase.
+A news report is a claim, not a confirmed fact. Not implemented yet.
 """
 
 

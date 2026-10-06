@@ -1,17 +1,4 @@
-"""Tests for app.analytics.covariance.
-
-Expected values are independent of the module under test: hand-calculated
-literals, or Python's ``statistics.covariance`` / ``variance`` /
-``correlation`` applied to the intended return series.
-
-Hand example used throughout
-  X = [0.01, 0.02, 0.03]   mean 0.02, deviations -0.01, 0, 0.01
-  Y = [0.03, 0.01, 0.02]   mean 0.02, deviations  0.01, -0.01, 0
-  cov(X, Y) = (-0.0001 + 0 + 0) / (3 - 1)       = -0.00005
-  var(X) = var(Y) = (0.0001 + 0 + 0.0001) / 2  =  0.0001
-  corr(X, Y) = -0.00005 / sqrt(0.0001 * 0.0001) = -0.5
-  annualized cov(X, Y) = -0.00005 * 252         = -0.0126
-"""
+"""Tests for app.analytics.covariance. Expected values come from hand calculations or the statistics module."""
 
 import math
 import statistics
@@ -56,7 +43,7 @@ def two_symbols(x=X, y=Y):
     return pd.concat([prices("ABC", x), prices("XYZ", y)], ignore_index=True)
 
 
-# 1-2. known covariance, independent check -------------------------------------------------------
+# Known covariance, independent check
 
 def test_known_returns_give_hand_calculated_covariance():
     cov = calculate_covariance_matrix(two_symbols())
@@ -88,7 +75,7 @@ def test_sample_not_population_covariance():
     assert cov == pytest.approx(population * 3 / 2)
 
 
-# 3-4 & 23-24. annualization ------------------------------------------------------------------------
+# Annualization
 
 def test_annualized_covariance_is_daily_times_252():
     annual = calculate_annualized_covariance_matrix(two_symbols())
@@ -126,7 +113,7 @@ def test_invalid_periods_per_year_fails_clearly(bad):
         calculate_annualized_covariance_matrix(two_symbols(), periods_per_year=bad)
 
 
-# 5-7 & 11. correlation ------------------------------------------------------------------------------
+# Correlation
 
 def test_hand_calculated_correlation():
     corr = calculate_correlation_matrix(two_symbols())
@@ -167,7 +154,7 @@ def test_correlation_diagonal_is_one_and_values_in_range():
     assert ((corr >= -1.0) & (corr <= 1.0)).all().all()
 
 
-# 8-10. symmetry and diagonal ------------------------------------------------------------------------
+# Symmetry and diagonal
 
 def test_matrices_are_symmetric_and_diagonal_is_variance():
     series = {"AAA": [0.012, -0.004, 0.007, 0.001], "BBB": [0.003, 0.002, -0.006, 0.011],
@@ -191,7 +178,7 @@ def test_single_symbol_gives_one_by_one_matrices():
     assert corr.loc["ABC", "ABC"] == 1.0
 
 
-# 12-14. no mixing, alignment, ordering -----------------------------------------------------------------
+# No mixing, alignment, ordering
 
 def test_symbols_are_not_mixed():
     # Very different price levels, rows shuffled together. Mixing series would
@@ -241,7 +228,7 @@ def test_return_matrix_layout():
     assert matrix.iloc[0].tolist() == pytest.approx([0.01, 0.03])
 
 
-# 15-17. invalid rows and missing observations -----------------------------------------------------------
+# Invalid rows and missing observations
 
 def test_invalid_rows_are_excluded_and_not_bridged():
     days = pd.bdate_range("2025-01-01", periods=6)
@@ -272,7 +259,7 @@ def test_missing_observations_are_reported():
     assert calculate_return_matrix(data)["NEW"].isna().sum() == 3
 
 
-# 18-19. insufficient data and constant series ---------------------------------------------------------------
+# Insufficient data and constant series
 
 def test_insufficient_common_observations_give_nan_not_zero():
     data = pd.concat([prices("ABC", [0.01, 0.02, -0.01, 0.005]), prices("NEW", [0.02])])
@@ -315,7 +302,7 @@ def test_constant_growth_with_float_noise_is_treated_as_constant():
     assert math.isnan(corr.loc["ABC", "GROW"])
 
 
-# 20-22. empty input, missing columns, no mutation ------------------------------------------------------------
+# Empty input, missing columns, no mutation
 
 def test_empty_input_is_handled_clearly():
     empty = two_symbols().iloc[0:0]
@@ -351,7 +338,7 @@ def test_input_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# end-to-end on the synthetic 3-symbol sample via the CSV importer ----------------------------------------------
+# End-to-end on the synthetic 3-symbol sample via the CSV importer
 
 def test_three_symbol_sample_through_csv_importer():
     canonical = load_csv_market_data(SAMPLE_3_SYMBOLS).data

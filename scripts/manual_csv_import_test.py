@@ -1,14 +1,9 @@
-"""Manual smoke test of the generic CSV importer (not part of the pytest suite).
+"""Manual smoke test of the CSV importer (not part of pytest).
 
     python scripts/manual_csv_import_test.py
 
-1. Imports the synthetic fixture tests/fixtures/synthetic_date_price_vol_change.csv.
-2. Imports a temporary CSV in the example provider layout, written to a
-   temporary directory outside the repository and deleted afterwards.
-3. Prints what the importer produced and checks the key mapping rules.
-4. Confirms the fixture file was not modified.
-
-Exit code 0 if every check passes, 1 otherwise.
+Imports the synthetic fixture and a temporary provider-style file, prints the
+result and checks the key mapping rules. Exits with 1 if a check fails.
 """
 
 import hashlib

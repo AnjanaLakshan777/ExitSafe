@@ -1,18 +1,4 @@
-"""Tests for app.analytics.ratios (Sharpe / Sortino).
-
-Expected values are computed independently in the tests from the documented
-formulas with plain Python (math / statistics), never with the module under test.
-
-Worked example: daily returns r = [+2%, -1%, +3%, -2%, +1%], P = 252
-  rf = 0:   mean r = 0.006                      annualized excess = 0.006 * 252 = 1.512
-            sample sd = sqrt(0.00172 / 4)       = 0.0207364413...
-            annualized volatility = sd * sqrt(252) = 0.3291808013842849
-            Sharpe  = 1.512 / 0.32918...        = 4.593220484431881
-            downside: min(r, 0) = [0, -.01, 0, -.02, 0]; mean of squares = 0.0005 / 5 = 0.0001
-            downside deviation = sqrt(0.0001) * sqrt(252) = 0.01 * sqrt(252) = 0.15874507866387544
-            Sortino = 1.512 / 0.158745...       = 9.524704719832526
-  rf = 5%:  daily rf = 1.05 ** (1/252) - 1, subtracted from every return
-"""
+"""Tests for app.analytics.ratios (Sharpe and Sortino), checked against plain-Python calculations."""
 
 import math
 import statistics
@@ -67,7 +53,7 @@ def expected(returns, rf=0.0, periods=252):
             "annual_return": growth ** (periods / len(returns)) - 1}
 
 
-# 1, 3, 24. worked example --------------------------------------------------------------------------
+# Worked example
 
 def test_sharpe_with_zero_risk_free_rate_matches_hand_calculation():
     result = row(prices("ABC", R))
@@ -94,7 +80,7 @@ def test_independent_reference_agrees_for_several_series():
         assert result["annualized_return"] == pytest.approx(ref["annual_return"], rel=1e-9)
 
 
-# 2, 6, 22, 23. risk-free rate -------------------------------------------------------------------------
+# Risk-free rate
 
 def test_daily_risk_free_rate_conversion_compounds_back_to_the_annual_rate():
     rf_d = daily_risk_free_rate(0.05)
@@ -135,7 +121,7 @@ def test_invalid_risk_free_rate_fails_clearly(bad):
         calculate_risk_adjusted_ratios(prices("ABC", R), risk_free_rate=bad)
 
 
-# 4-5. denominators --------------------------------------------------------------------------------------
+# Denominators
 
 def test_sharpe_uses_total_standard_deviation():
     result = row(prices("ABC", R))
@@ -155,7 +141,7 @@ def test_sortino_uses_downside_deviation_not_total_volatility():
     assert calm["downside_deviation"] == pytest.approx(math.sqrt(0.0002 / 4) * math.sqrt(252))
 
 
-# 7-9. periods per year --------------------------------------------------------------------------------------
+# Periods per year
 
 def test_custom_periods_per_year_is_used_everywhere():
     result = row(prices("ABC", R), risk_free_rate=0.05, periods_per_year=52)
@@ -173,7 +159,7 @@ def test_invalid_periods_per_year_fails(bad):
         calculate_risk_adjusted_ratios(prices("ABC", R), periods_per_year=bad)
 
 
-# 10-12. undefined ratios and negative returns ------------------------------------------------------------
+# Undefined ratios and negative returns
 
 def test_zero_volatility_gives_nan_not_infinity():
     result = row(prices("ABC", [0.0, 0.0, 0.0]), risk_free_rate=0.05)
@@ -204,7 +190,7 @@ def test_negative_returns_give_negative_ratios():
     assert result["sortino_ratio"] == pytest.approx(ref["sortino"], rel=1e-9) and result["sortino_ratio"] < 0
 
 
-# 13-17. symbols, ordering, validation status ---------------------------------------------------------------
+# Symbols, ordering, validation status
 
 def test_multiple_symbols_are_independent():
     xyz = [0.01, 0.004, -0.006, 0.012]
@@ -244,7 +230,7 @@ def test_warning_rows_remain_usable():
     assert result["sharpe_ratio"] == pytest.approx(4.593220484431881, rel=1e-12)
 
 
-# 18-21. insufficient data, empty input, columns, mutation ----------------------------------------------------
+# Insufficient data, empty input, columns, mutation
 
 @pytest.mark.parametrize("returns", [[], [0.01]])
 def test_insufficient_observations_give_nan_not_zero(returns):
@@ -276,7 +262,7 @@ def test_input_is_not_mutated():
     pd.testing.assert_frame_equal(data, before)
 
 
-# output shape and annualized return ---------------------------------------------------------------------------
+# Output shape and annualized return
 
 def test_sharpe_and_sortino_outputs():
     assert list(calculate_sharpe_ratio(prices("ABC", R)).columns) == SHARPE_COLUMNS

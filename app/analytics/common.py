@@ -6,9 +6,8 @@ from app.analytics.returns import CANONICAL_REQUIRED_COLUMNS
 
 TRADING_DAYS_PER_YEAR = 252
 
-# Variation below this (in daily-return units) is treated as no variation at
-# all, so floating-point noise (e.g. a steady growth path) is not mistaken for
-# real volatility in correlations and risk-adjusted ratios.
+# Variation smaller than this counts as none, so floating-point noise isn't
+# mistaken for real volatility.
 CONSTANT_RETURN_TOLERANCE = 1e-12
 
 

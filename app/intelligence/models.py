@@ -1,12 +1,4 @@
-"""Intelligence-specific types: raw collected items and evidence.
-
-The event itself (``MarketEvent`` and its enums) is stored data and lives in
-``app.data.schemas.event_schema``.
-
-Every statement used as evidence carries an ``EvidenceBasis`` so confirmed
-facts, reported claims, model inferences and scenario assumptions are never
-mixed up.
-"""
+"""Types for raw collected items and for the evidence behind each statement."""
 
 from collections.abc import Callable
 from dataclasses import dataclass

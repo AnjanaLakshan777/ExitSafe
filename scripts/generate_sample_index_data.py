@@ -1,12 +1,7 @@
-"""Generate data/sample/sample_index_data.csv: SYNTHETIC index series for testing.
+"""Generate data/sample/sample_index_data.csv, a synthetic index file for testing.
 
-The values are invented (fixed random seed) and are NOT real ASPI or S&P SL20
-levels. The index names are used only so the Market Regime section can be
-exercised with the names it will see in real files. Re-running this script
-reproduces the file exactly.
-
-  ASPI      calm rise -> volatile spell -> sharp fall -> rebound -> calm
-  S&P SL20  calm rise -> slow, steady decline (normal volatility)
+The values are invented (fixed seed) and are not real ASPI or S&P SL20 levels;
+the names are only used so the Market Regime section can be tried out.
 
     python scripts/generate_sample_index_data.py
 """

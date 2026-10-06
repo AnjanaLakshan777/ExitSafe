@@ -1,31 +1,7 @@
-"""Covariance and correlation of daily returns across symbols.
+"""Covariance and correlation of daily returns between stocks.
 
-Returns come from app.analytics.returns.calculate_daily_returns on canonical
-market data (no second return definition), so INVALID rows never contribute
-and are never bridged over.
-
-Alignment (missing-data policy)
-  A date is a *common observation* only if every symbol has a usable (finite)
-  daily return on it AND all those returns start from the same previous date,
-  i.e. they cover the same period. A symbol that skipped a day has a two-day
-  return there; pairing it with another symbol's one-day return would mix
-  periods, so such dates are excluded. Every matrix element is computed from
-  the same set of common dates; nothing is filled in. ``describe_return_alignment``
-  reports how many dates were used and why others were left out.
-
-Formulas
-  daily covariance      = sample covariance of daily returns (ddof = 1)
-                        = sum((x - mean_x)(y - mean_y)) / (n - 1)
-  annualized covariance = daily covariance * periods_per_year   (default 252;
-                          NOT sqrt(252), which is for volatility)
-  correlation           = Pearson correlation of daily returns (not annualized)
-
-Insufficient data
-  Fewer than 2 common observations gives an all-NaN matrix (never zeros). A
-  symbol whose common returns are constant (range <= CONSTANT_RETURN_TOLERANCE)
-  has NaN correlations, including its diagonal, because correlation is
-  undefined without variation. Values are full precision; rounding belongs to
-  presentation.
+Only dates where every stock has a return over the same period are used, so a
+two-day return after a gap is never paired with a one-day return.
 """
 
 import numpy as np
@@ -41,11 +17,7 @@ from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_return
 
 
 def calculate_return_matrix(data):
-    """Date x symbol matrix of usable daily returns, NaN where a symbol has none.
-
-    Rows: every date on which at least one symbol has a usable return (sorted).
-    Columns: every symbol in the input (sorted), even one with no usable returns.
-    """
+    """Daily returns as a date x symbol table, with NaN where a stock has no return."""
     return _alignment(data, "a return matrix")[0]
 
 
@@ -55,27 +27,12 @@ def calculate_aligned_return_matrix(data):
 
 
 def describe_return_alignment(data):
-    """How much data the covariance/correlation matrices are based on.
-
-    Returns a dict with:
-      symbols              symbols in the matrices (sorted)
-      observations         number of common observations used
-      start_date, end_date first and last common observation (None if none)
-      returns_per_symbol   usable daily returns available per symbol
-      candidate_dates      dates on which at least one symbol has a usable return
-      excluded_missing     candidate dates left out because a symbol had no return
-      excluded_misaligned  candidate dates left out because returns covered
-                           different periods (different previous dates)
-      base_date            date the first common return starts from (None if none)
-    """
+    """Summarise how many dates the matrices use and why other dates were dropped."""
     return _alignment(data, "a return alignment")[2]
 
 
 def calculate_covariance_matrix(data):
-    """Square symbol x symbol matrix of daily sample covariances (ddof = 1).
-
-    Diagonal = each symbol's return variance over the common observations.
-    """
+    """Daily sample covariance matrix (all NaN with fewer than two common dates)."""
     aligned = _alignment(data, "covariance")[1]
     symbols = list(aligned.columns)
     if len(aligned) < 2:
@@ -90,11 +47,7 @@ def calculate_annualized_covariance_matrix(data, periods_per_year=TRADING_DAYS_P
 
 
 def calculate_correlation_matrix(data):
-    """Square symbol x symbol matrix of Pearson correlations of daily returns.
-
-    Values lie in [-1, 1] (floating-point overshoot is clipped). The diagonal
-    is 1 for symbols with varying returns and NaN for constant ones.
-    """
+    """Pearson correlation matrix; a stock with constant returns gets NaN."""
     aligned = _alignment(data, "correlation")[1]
     symbols = list(aligned.columns)
     if len(aligned) < 2:
