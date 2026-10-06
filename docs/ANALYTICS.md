@@ -16,7 +16,9 @@ and return new results at full precision. Rounding belongs to presentation.
 | 8 | Liquidity, stock-level (`app/analytics/liquidity.py`) | implemented |
 | 9 | Portfolio risk, fixed user weights (`app/analytics/portfolio_risk.py`) | implemented |
 | 10 | Risk-aware portfolio optimization (`app/portfolio/optimizer.py`) | implemented |
-| 11–13 | Market regime, stress testing, backtesting | not implemented |
+| 11 | Market regime, rule-based (`app/regime/regime_detector.py`) | implemented |
+| 12 | Stress testing, scenario-based (`app/stress_testing/stress_engine.py`) | implemented |
+| 13 | Backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -1024,3 +1026,359 @@ sample like this is exactly where historical estimates are least reliable.
 10. **No short selling.**
 11. **No leverage.**
 12. **No guarantee of future results.**
+
+## 11. Market regime (rule-based, version 1)
+
+**Purpose.** A market regime describes the **current market environment from
+volatility, drawdown and trend**. Every rule is explicit and testable.
+- **Not a forecast:** it does not predict future prices.
+- **No effect on other modules:** it does not change the optimizer or any
+  portfolio weights. The result is only made available for later phases.
+
+```python
+from app.data.loaders.index_series_loader import load_index_csv
+from app.regime.regime_detector import detect_market_regime, RegimeThresholds
+
+index = load_index_csv("aspi.csv", index_name="ASPI").data   # date, index_name, close, validation_status
+result = detect_market_regime(index, "ASPI")                 # defaults below; thresholds=RegimeThresholds(...)
+result.current        # latest date: regime, rolling_volatility, current_drawdown, trend_state, ...
+result.history        # one row per usable date: indicators, states, regime, reason
+```
+
+**Index choice.** The regime is measured on a broad market index such as
+**ASPI** or **S&P SL20**, not on the user's stocks.
+- **Input:** an index series with `date`, `index_name` and `close`.
+- **Missing index:** if the requested index is not in the data, a clear error
+  is raised. The detector never switches to another index or to a stock.
+- **Several indices:** if the data holds more than one, the caller must name
+  the one to use.
+- **No fallback proxy** (for example an average of stocks) is built. Such a
+  proxy would not be a market index.
+
+**Index files.** These are read by `app/data/loaders/index_series_loader.py`.
+The stock importer cannot be used, because it needs open/high/low/volume and
+ASPI files often have no volume.
+- **Accepted headers:** `Date`, `Index` / `Index Name` / `index_name`, and
+  `Close` / `Price` / `Value`.
+- **No Index column:** the caller must give the index name. It is never
+  guessed.
+- **Parsing:** dates and numbers use the stock importer's parsers, so day and
+  month are never swapped silently.
+- **INVALID rows:** missing, invalid or ambiguous dates; a missing index name;
+  a missing, invalid or non-positive close; and duplicate dates (every copy is
+  marked).
+- **WARNING rows:** weekend dates.
+
+**Sample data.** `data/sample/sample_index_data.csv` is **synthetic**: invented
+values from `scripts/generate_sample_index_data.py` with a fixed seed. It uses
+the names ASPI and S&P SL20 only to exercise the console, and its values are
+not real index levels.
+
+**Usable rows and returns**
+- **What counts:** a usable row has a date, a positive close and is not
+  INVALID. WARNING rows count.
+- **Duplicates:** duplicate dates among usable rows raise an error, as in the
+  other analytics modules.
+- **Returns:** daily returns come from `calculate_daily_returns` (section 1),
+  so no return is formed across an INVALID row.
+- **Missing dates:** a missing calendar date is simply absent, and the next
+  return runs from the previous available close.
+- **Windows:** windows count usable observations.
+
+**Indicators** (defaults in brackets, all configurable)
+
+| Indicator | Definition |
+|---|---|
+| `rolling_volatility` | sample std (ddof = 1) of the last `volatility_window` [20] daily returns; **daily**, not annualized (× √252 only for display) |
+| `volatility_baseline` | the same over the last `baseline_window` [100] returns (includes the recent 20) |
+| `volatility_ratio` | rolling_volatility / volatility_baseline; undefined for a flat market (baseline ≤ 1e-12) |
+| `running_peak` | highest close of the last `drawdown_lookback` [60] closes, including today |
+| `current_drawdown` | close / running_peak − 1 (≤ 0) |
+| `moving_average` | simple mean of the last `trend_window` [50] closes |
+| `trend_ratio` | close / moving_average |
+
+- **Missing returns:** a return that is missing because of an INVALID row is
+  skipped by the volatility windows. It is never filled with zero.
+- **Peak window:** the peak uses the drawdown lookback rather than all history,
+  so a fall years ago does not keep the market in drawdown for ever.
+
+**States** (the thresholds are **model assumptions**, not universal market
+rules)
+
+| State | Rule |
+|---|---|
+| UPTREND | trend_ratio > 1 + `neutral_band` [0.02] |
+| DOWNTREND | trend_ratio < 1 − `neutral_band` |
+| NEUTRAL | otherwise. The band keeps small moves around the average from flipping the trend |
+| volatility NORMAL | ratio ≤ `elevated_volatility_ratio` [1.25], or no variation at all |
+| volatility ELEVATED | elevated < ratio ≤ `high_volatility_ratio` [1.5] |
+| volatility HIGH | ratio > `high_volatility_ratio` |
+
+**Why 1.25 and not 1.0 for "elevated".**
+- **The ratio sits near 1 by construction.** In a calm, unchanging market it
+  varies around 1 by sampling noise alone. A 20-return standard deviation has a
+  relative standard error of about 1/√(2 × 19) ≈ 16%.
+- **A 1.0 cut-off misfires.** It would call roughly half of all calm days
+  elevated; the tests show a perfectly regular calm series at a ratio of 1.02.
+- **The default is therefore 1.25,** about 1.5 standard errors above 1.
+  `RegimeThresholds(elevated_volatility_ratio=1.0)` restores the suggested 1.0.
+
+**Regime decision tree** (evaluated in this order; the first match wins)
+
+| # | Regime | Condition |
+|---|---|---|
+| 1 | **N/A** | any indicator, or any of the previous `recovery_lookback` volatility states, is not defined yet (warm-up) |
+| 2 | **STRESS** | volatility HIGH **and** (current_drawdown ≤ `stress_drawdown` [−10%] **or** trend_ratio ≤ `strong_downtrend_ratio` [0.95]) |
+| 3 | **RECOVERY** | the highest volatility ratio of the previous `recovery_lookback` [40] observations > elevated threshold, **and** today's ratio < that peak (falling), **and** volatility not HIGH, **and** trend not DOWNTREND, **and** current_drawdown ≤ `recovery_drawdown` [−2%] |
+| 4 | **HIGH_VOLATILITY** | volatility ELEVATED or HIGH |
+| 5 | **NORMAL** | otherwise |
+
+- **STRESS and RECOVERY cannot overlap.** STRESS requires HIGH volatility and
+  RECOVERY excludes it.
+- **Why RECOVERY comes before HIGH_VOLATILITY.** Volatility that is still
+  elevated but falling, after the decline has stopped and below the peak, is
+  exactly the recovery phase.
+- **Why "improving" means not DOWNTREND rather than UPTREND.** Right after a
+  fall, the moving average still holds pre-fall prices, so the close needs weeks
+  to rise 2% above it. Requiring UPTREND would miss most rebounds.
+- **Why the −2% recovery threshold.** Within 2% of the peak the recovery counts
+  as complete, so a tiny dip just after a new peak does not flip the regime back
+  to RECOVERY.
+- **A calm, steady decline is NORMAL with trend DOWNTREND.** The trend is always
+  reported alongside the regime.
+- **Reasons:** each row has a `regime_reason`, for example "High volatility
+  (ratio 2.18 > 1.5) and drawdown −10.1% ≤ −10%".
+- **No confidence score** is produced in version 1, because it could not be
+  defined transparently.
+
+**Warm-up.** A regime needs every rolling window full, including the
+recovery rule's lookback of defined volatility.
+- **Requirement:** max(`baseline_window` + 1 + `recovery_lookback`,
+  `trend_window`, `drawdown_lookback`) observations without gaps. That is
+  **141** with the defaults.
+- **Before that:** every row is **N/A**, never a false NORMAL. Rolling values
+  are NaN, never 0, until their own window is full.
+- **Reported:** `required_observations`, `warm_up_rows` and
+  `first_classified_date`.
+
+**Example** (synthetic sample ASPI, defaults). The regimes run in this order:
+
+| Regime | Rows |
+|---|---|
+| N/A | 140 (warm-up) |
+| NORMAL | 61 |
+| HIGH_VOLATILITY | 10 |
+| STRESS | 12 |
+| HIGH_VOLATILITY | 9 |
+| STRESS | 7 |
+| HIGH_VOLATILITY | 3 |
+| NORMAL | 6 |
+| RECOVERY | 22 |
+| NORMAL | 6 |
+| RECOVERY | 1 |
+| NORMAL | 4 |
+| RECOVERY | 1 |
+| NORMAL | 39 |
+
+The short RECOVERY/NORMAL alternation near the end is the rules responding to
+noise near a threshold. See limitation 7.
+
+**Limitations:**
+1. **Simple first version:** rule-based regime detection is a simple first
+   version, and the decision tree is deliberately transparent.
+2. **Assumed thresholds:** windows and thresholds are configurable assumptions,
+   not market rules.
+3. **No forecast:** it does not predict or guarantee future market direction.
+4. **Short history:** short history prevents a reliable classification. The
+   regime is N/A until 141 observations (with the defaults), and early
+   estimates are noisy.
+5. **No machine learning yet:** no machine-learning regime model (HMM,
+   clustering) is used.
+6. **No regime-dependent optimization yet:** the optimizer ignores the regime.
+7. **No persistence rule:** beyond the trend band and the recovery threshold,
+   there is no minimum duration, so a regime can flicker for a day near a
+   threshold.
+8. **One index at a time:** a single index is used. No cross-checks between
+   indices and no breadth or liquidity signals.
+
+## 12. Stress testing (deterministic scenarios)
+
+**Purpose.** Stress testing asks **what could happen to the portfolio under a
+hypothetical adverse scenario**.
+- **Scenarios are model assumptions, not forecasts.** No probability is attached
+  and they are not calibrated to historical events. "Scenario return" means the
+  return under the assumed shock, not an expected return.
+- **Source data is never modified,** and the optimizer is not re-run.
+
+```python
+from app.stress_testing.stress_engine import (DEFAULT_SCENARIOS, run_stress_scenarios,
+                                              run_market_stress_test, run_combined_stress_test)
+
+weights = {"ABC": 0.40, "XYZ": 0.35, "LMN": 0.25}         # same format as portfolio risk
+report = run_stress_scenarios(data, weights, DEFAULT_SCENARIOS, portfolio_value=20_000_000,
+                              sector_mapping={"ABC": "Banking", "LMN": "Banking", "XYZ": "Manufacturing"})
+run_combined_stress_test(data, weights, market_shock=-0.10, sector_name="Banking",
+                         sector_shock=-0.20, sector_mapping={...})
+```
+
+**Portfolio input.** The engine uses the same weights as Portfolio Risk
+(`validate_weights`).
+- **Accepted forms:** `{symbol: weight}`, a symbol/weight table or pairs.
+- **Rules:** long-only, summing to 1, never normalized, and every symbol must be
+  in the data.
+- **Optional `portfolio_value`:** turns returns into rupee amounts. Monetary
+  fields are empty without it.
+
+**Scenario model** (`StressScenario`). Every number lives in one structured
+definition, never in code branches.
+- **Fields:**
+  - `name`, `scenario_type`, `description`
+  - `market_shock`, `sector_name` + `sector_shock`
+  - `volatility_multiplier`, `liquidity_multiplier`
+  - `enabled`
+- **Types:** MARKET, SECTOR, VOLATILITY and LIQUIDITY must set **only** their own
+  component. COMBINED must set two or more.
+- **No double counting:** each component is one field and is applied exactly
+  once, so a combined scenario cannot count a shock twice by accident.
+
+**Default scenarios** (assumptions, not historically proven events)
+
+| Scenario | Type | Definition |
+|---|---|---|
+| Market −10% / −20% / −30% | MARKET | every holding's return − 10 / 20 / 30 percentage points |
+| High Volatility 1.5x / 2.0x | VOLATILITY | every holding falls 1.5 / 2.0 of its own daily standard deviations |
+| Liquidity −50% | LIQUIDITY | trading capacity (ADTV) halved; prices unchanged |
+
+Custom market, sector, volatility, liquidity and combined scenarios are built
+from the same fields. `scenario_from_components` infers the type from the
+components that are set.
+
+**Shock convention: absolute return shocks.** A shock is added to the base
+return; prices are not multiplied by it.
+
+```
+stressed_return_i = base_return_i
+                    + market_shock                                  (every holding)
+                    + sector_shock     if sector_i == sector_name   (case-insensitive)
+                    − volatility_multiplier × σ_i                   (volatility component)
+```
+
+- **Example:** a base return of +2% with a −10% shock gives −8%.
+- **Losses above 100% are rejected:** a stressed return below −100% raises an
+  error.
+- **Base return:**
+  - `BASELINE_ZERO` (the default) uses 0, so the scenario return is the shock
+    itself, independent of whatever happened on the last day.
+  - `BASELINE_HISTORICAL_MEAN` uses each holding's mean daily return on the
+    portfolio's common dates.
+
+**Sector shocks**
+- **The sector mapping is required.** It is `{symbol: sector}` or a
+  symbol/sector table, and sectors are **never guessed**.
+- **Missing sector data:** with no mapping, or a holding without a sector, the
+  result is **UNAVAILABLE**, with the message "Sector data unavailable …".
+- **Any sector can be targeted,** for example "Banking −20%". Holdings in other
+  sectors receive no sector component.
+- **Target sector not held:** if no holding is in the target sector, the result
+  says so in a warning.
+
+**Volatility shocks**
+- **Formula:** σ_i is holding i's daily sample standard deviation (ddof = 1) on
+  the portfolio's common dates (section 3 alignment). It needs
+  `min_observations` (default 20); otherwise the result is UNAVAILABLE.
+- **What it represents:** every holding moves down by k of its **own**
+  standard deviations **on the same day**. That is a hypothetical adverse day,
+  as if the holdings were perfectly correlated.
+- **No diversification:** the portfolio loss is k × Σ w_i σ_i, which is at
+  least k × the portfolio's own volatility.
+- **Not a forecast:** volatility itself is not "multiplied" into a price
+  forecast.
+
+**Liquidity shocks.** Liquidity shocks change trading capacity, **never
+prices**.
+- **ADTV source:** ADTV comes from the liquidity module (section 8).
+  - Reported turnover is used when every usable day has it.
+  - Otherwise it is the close × volume estimate.
+  - Zero-volume days count as 0.
+  - INVALID rows are excluded.
+
+```
+stressed_ADTV              = ADTV × liquidity_multiplier          (0 < m ≤ 1)
+position_i                 = portfolio_value × w_i
+stressed_position_to_adtv  = position_i / stressed_ADTV
+stressed_liquidation_days  = position_i / (stressed_ADTV × participation_rate)   (base: same with ADTV)
+```
+
+- **Portfolio value required:** a liquidity shock needs `portfolio_value`.
+  Without it the result is UNAVAILABLE.
+- **Zero or missing ADTV:** an ADTV of 0 gives status `ZERO_ADTV`, and no
+  liquidity data gives `NO_LIQUIDITY_DATA`. Both leave the ratios and days as
+  NaN with a warning, and nothing is invented.
+- **No order book:** no order-book or market-impact model is used.
+
+**Combined scenarios.** For a stock in the target sector:
+
+```
+stressed_return = base + market_shock + sector_shock (+ volatility component)
+```
+
+- **Other stocks** get base + market_shock (+ volatility component).
+- **Liquidity component:** it only adds the liquidity table and never moves
+  returns.
+
+**Portfolio impact** (from the stressed portfolio return, never an average of
+stock results)
+
+| Output | Formula |
+|---|---|
+| `portfolio_return` | R = Σ w_i × stressed_return_i |
+| `portfolio_loss` | −R (not clamped: a scenario gain shows as a negative loss) |
+| `portfolio_loss_amount` | portfolio_value × portfolio_loss (only with a value) |
+| `stressed_portfolio_value` | portfolio_value × (1 + R) (only with a value) |
+| `stress_contribution_i` | w_i × stressed_return_i (they add up to R) |
+| largest negative contribution | the holding with the most negative contribution |
+| most exposed holding | price scenarios: the lowest stressed return; liquidity scenarios: the longest stressed liquidation time |
+
+Each result also carries `symbol_impacts` (base return, each component, stressed
+return, contribution), `liquidity_impacts` (liquidity scenarios),
+`assumptions`, `warnings` and a status (OK or UNAVAILABLE with a message).
+
+**Scenario loss vs historical risk.** `run_stress_scenarios` reports the
+portfolio's **historical** 1-day VaR and CVaR (section 9) **unchanged**, next to
+the scenario losses.
+- **Historical VaR/CVaR** describe the distribution of past daily returns.
+- **A stress loss** is the result of an assumed shock.
+- **Not a stressed VaR or CVaR:** a stress loss is never called a "stressed
+  CVaR", and scenarios never alter the historical figures.
+
+**Example** (three-stock sample, ABC 40% / XYZ 35% / LMN 25%, Rs. 20,000,000,
+base return 0, mapping ABC and LMN = Banking, XYZ = Manufacturing)
+
+| Scenario | Portfolio return | Loss amount (Rs.) | Largest negative contribution |
+|---|---|---|---|
+| Market −10% | −10.00% | 2,000,000 | ABC (−4.00%) |
+| Market −30% | −30.00% | 6,000,000 | ABC (−12.00%) |
+| High Volatility 2.0x | −4.60% | 920,095 | XYZ (−2.04%) |
+| Liquidity −50% | 0.00% (prices unchanged) | 0 | none; LMN liquidation 62.97 → 125.94 days |
+| Market −10% + Banking −20% | −23.00% | 4,600,000 | ABC (−12.00%) |
+
+For comparison, the historical 1-day VaR / CVaR (95%) are 2.54% / 2.83%.
+
+**Limitations:**
+1. **Hypothetical scenarios:** the scenarios are not predictions.
+2. **Assumed shocks:** the shock sizes are model assumptions.
+3. **No probabilities:** no probability is assigned to any scenario.
+4. **No event calibration:** scenarios are not calibrated to historical events
+   yet.
+5. **No market impact:** there is no nonlinear market-impact model, and a
+   liquidity shock never moves prices.
+6. **No order-book data.**
+7. **No transaction costs.**
+8. **No dynamic rebalancing:** weights are held as given.
+9. **No derivatives:** option and derivative exposures are not modelled.
+10. **No regime calibration:** scenarios are not calibrated to the market
+    regime.
+11. **Short history:** a short data history limits the volatility scenario and
+    the historical-mean baseline.
+12. **Sector mapping needed:** sector results require a reliable sector
+    mapping; none ships with the project.

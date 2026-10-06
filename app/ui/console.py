@@ -33,6 +33,24 @@ from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
+from app.data.loaders.index_series_loader import (
+    IndexImportError,
+    IndexNameRequiredError,
+    load_index_csv,
+)
+from app.regime.regime_detector import UNDEFINED as REGIME_UNDEFINED
+from app.regime.regime_detector import detect_market_regime
+from app.stress_testing.stress_engine import (
+    BASELINE_HISTORICAL_MEAN,
+    BASELINE_ZERO,
+    DEFAULT_SCENARIOS,
+    run_stress_scenarios,
+    scenario_from_components,
+)
+from app.stress_testing.stress_engine import LIQUIDITY_NO_DATA as LIQUIDITY_STRESS_NO_DATA
+from app.stress_testing.stress_engine import LIQUIDITY_OK as LIQUIDITY_STRESS_OK
+from app.stress_testing.stress_engine import LIQUIDITY_ZERO_ADTV as LIQUIDITY_STRESS_ZERO
+from app.stress_testing.stress_engine import STATUS_OK as STRESS_STATUS_OK
 from app.portfolio.optimizer import (
     LIQUIDITY_AT_LIMIT,
     LIQUIDITY_NO_DATA,
@@ -543,3 +561,188 @@ def optimization_comparison_display(result):
     table = [(name, format_percent(a), format_percent(b)) for name, a, b in rows]
     table.append(("HHI", f"{ew.hhi:.4f}", f"{opt.hhi:.4f}"))
     return pd.DataFrame(table, columns=["Metric", "Equal Weight", "ExitSafe Optimized"])
+
+
+INDEX_SAMPLE_CSV = PROJECT_ROOT / "data" / "sample" / "sample_index_data.csv"
+KNOWN_INDEXES = ["ASPI", "S&P SL20"]
+REGIME_LABELS = {"NORMAL": "Normal", "HIGH_VOLATILITY": "High volatility", "STRESS": "Stress",
+                 "RECOVERY": "Recovery", REGIME_UNDEFINED: "N/A (warm-up)"}
+TREND_LABELS = {"UPTREND": "Uptrend", "DOWNTREND": "Downtrend", "NEUTRAL": "Neutral",
+                REGIME_UNDEFINED: "n/a"}
+
+
+def load_index_data(file_name, content, index_name=None):
+    """(IndexImportResult, error message). Bytes are read via a temporary file, as in run_import.
+
+    ``index_name`` is used only when the file has no Index column; a file that
+    names its index keeps its own names.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / Path(file_name).name
+            path.write_bytes(content)
+            try:
+                return load_index_csv(path), None
+            except IndexNameRequiredError as exc:
+                if not index_name:
+                    return None, str(exc)
+                return load_index_csv(path, index_name), None
+    except IndexImportError as exc:
+        return None, f"Index file could not be imported: {exc}"
+
+
+def market_regime(data, index_name):
+    """(MarketRegimeResult, error message) for one index with the default settings."""
+    try:
+        return detect_market_regime(data, index_name), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def regime_current_display(result):
+    """A new, display-only Metric / Value table of the latest date's regime."""
+    c = result.current
+    rows = [
+        ("Date", str(c.date.date())),
+        ("Regime", REGIME_LABELS[c.regime]),
+        ("Reason", c.regime_reason),
+        (f"Rolling Volatility ({result.volatility_window}-day, daily)",
+         format_percent(c.rolling_volatility)),
+        ("Rolling Volatility (annualized, × √252, for display)",
+         format_percent(c.rolling_volatility * math.sqrt(252))),
+        (f"Volatility Ratio ({result.volatility_window}-day / {result.baseline_window}-day)",
+         "n/a" if pd.isna(c.volatility_ratio) else f"{c.volatility_ratio:.2f}"),
+        (f"Current Drawdown (from {result.drawdown_lookback}-day peak)",
+         format_percent(c.current_drawdown)),
+        (f"Trend State (close / {result.trend_window}-day average)",
+         TREND_LABELS[c.trend_state] + ("" if pd.isna(c.trend_ratio)
+                                        else f" ({c.trend_ratio:.3f})")),
+        ("Index Close", _amount(c.current_close)),
+    ]
+    return pd.DataFrame(rows, columns=["Metric", "Value"])
+
+
+def regime_history_display(result):
+    """A new, display-only historical regime table (date, regime, volatility, drawdown, trend)."""
+    h = result.history
+    return pd.DataFrame({
+        "Date": h["date"].dt.date.astype(str),
+        "Regime": [REGIME_LABELS[r] for r in h["regime"]],
+        f"Rolling Volatility ({result.volatility_window}-day, daily)":
+            [format_percent(v) for v in h["rolling_volatility"]],
+        "Current Drawdown": [format_percent(v) for v in h["current_drawdown"]],
+        "Trend State": [TREND_LABELS[t] for t in h["trend_state"]],
+    })
+
+
+BASELINE_LABELS = {BASELINE_ZERO: "Zero (scenario shock only)",
+                   BASELINE_HISTORICAL_MEAN: "Historical mean daily return"}
+LIQUIDITY_STATUS_TEXT = {LIQUIDITY_STRESS_OK: "OK", LIQUIDITY_STRESS_ZERO: "Zero ADTV",
+                         LIQUIDITY_STRESS_NO_DATA: "No liquidity data"}
+
+
+def parse_sector_mapping(text):
+    """(None or {symbol: sector}, error message) from "SYMBOL, Sector" lines.
+
+    The first comma or tab separates the symbol from the sector, so sector names
+    may contain spaces ("Banking Finance & Insurance"). Blank text gives None.
+    """
+    mapping = {}
+    for number, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        parts = [p.strip() for p in line.replace("\t", ",").split(",", 1)]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            return None, f"Sector line {number}: enter it as 'SYMBOL, Sector'."
+        symbol, sector = parts[0].upper(), parts[1]
+        if symbol in mapping and mapping[symbol].casefold() != sector.casefold():
+            return None, f"{symbol} is mapped to two sectors ({mapping[symbol]}, {sector})."
+        mapping[symbol] = sector
+    return (mapping or None), None
+
+
+def custom_stress_scenario(market_percent=0.0, sector_name="", sector_percent=0.0,
+                           volatility_multiplier=0.0, liquidity_multiplier=1.0):
+    """(None or a StressScenario, error message) from the custom inputs.
+
+    A component is used only when set: market or sector shock other than 0%,
+    volatility multiplier above 0, liquidity multiplier below 1.
+    """
+    sector_name = (sector_name or "").strip()
+    if sector_percent and not sector_name:
+        return None, "Enter a sector name for the custom sector shock."
+    try:
+        return scenario_from_components(
+            "Custom scenario",
+            market_shock=market_percent / 100 if market_percent else None,
+            sector_name=sector_name if sector_percent else None,
+            sector_shock=sector_percent / 100 if sector_percent else None,
+            volatility_multiplier=volatility_multiplier if volatility_multiplier > 0 else None,
+            liquidity_multiplier=liquidity_multiplier if liquidity_multiplier < 1 else None,
+            description="Custom scenario built from the inputs below."), None
+    except ValueError as exc:
+        if "at least one shock" in str(exc):
+            return None, None
+        return None, str(exc)
+
+
+def stress_report(data, holdings, portfolio_value, scenarios, sector_mapping,
+                  participation_percent, baseline, confidence_percent, min_observations):
+    """(StressReport, error message). Percent inputs are entered as 95.0 = 95%."""
+    try:
+        return run_stress_scenarios(
+            data, holdings, scenarios, portfolio_value=float(portfolio_value),
+            sector_mapping=sector_mapping, participation_rate=participation_percent / 100,
+            baseline=baseline, confidence_level=confidence_percent / 100,
+            min_observations=int(min_observations)), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def stress_summary_display(report):
+    """A new, display-only scenario summary (numbers only, no labels or advice)."""
+    rows = []
+    for r in report.results:
+        ok = r.status == STRESS_STATUS_OK
+        contribution = ("n/a" if r.largest_negative_contributor is None else
+                        f"{r.largest_negative_contributor} ({format_percent(r.largest_negative_contribution)})")
+        rows.append({
+            "Scenario": r.scenario_name,
+            "Portfolio Return": format_percent(r.portfolio_return) if ok else "n/a",
+            "Portfolio Loss": format_percent(r.portfolio_loss) if ok else "n/a",
+            "Loss Amount (Rs.)": _amount(r.portfolio_loss_amount) if ok and r.portfolio_loss_amount is not None else "n/a",
+            "Stressed Portfolio Value (Rs.)": _amount(r.stressed_portfolio_value) if ok and r.stressed_portfolio_value is not None else "n/a",
+            "Largest Negative Contribution": contribution,
+            "Most Exposed Holding": r.most_exposed_holding or "n/a",
+            "Status": "OK" if ok else "Unavailable",
+        })
+    return pd.DataFrame(rows)
+
+
+def stress_impact_display(result):
+    """A new, display-only stock impact table for one scenario."""
+    impacts = result.symbol_impacts
+    table = pd.DataFrame({
+        "Symbol": impacts["symbol"],
+        "Weight": [format_percent(w) for w in impacts["weight"]],
+        "Base Return": [format_percent(v) for v in impacts["base_return"]],
+        "Stressed Return": [format_percent(v) for v in impacts["stressed_return"]],
+        "Contribution": [format_percent(v) for v in impacts["stress_contribution"]],
+    })
+    if impacts["sector"].notna().any():
+        table.insert(1, "Sector", [s or "n/a" for s in impacts["sector"]])
+    return table
+
+
+def stress_liquidity_display(result):
+    """A new, display-only liquidity table for a liquidity scenario."""
+    rows = result.liquidity_impacts
+    return pd.DataFrame({
+        "Symbol": rows["symbol"],
+        "Base ADTV (Rs.)": [_amount(v) for v in rows["base_adtv"]],
+        "Stressed ADTV (Rs.)": [_amount(v) for v in rows["stressed_adtv"]],
+        "ADTV Source": [TRADED_VALUE_SOURCE_LABELS.get(s, "n/a") for s in rows["traded_value_source"]],
+        "Base Liquidation Days": [_amount(v) for v in rows["base_liquidation_days"]],
+        "Stressed Liquidation Days": [_amount(v) for v in rows["stressed_liquidation_days"]],
+        "Status": [LIQUIDITY_STATUS_TEXT[s] for s in rows["liquidity_status"]],
+    })

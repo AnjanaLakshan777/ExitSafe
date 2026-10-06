@@ -456,3 +456,109 @@ def test_optimize_reports_infeasible_liquidity_and_insufficient_data():
     result, error = optimize(data, ["ABC", "LMN", "XYZ"], 0.0, 40.0, 1.0, 1.0, 1.0, 95.0, 30, 252,
                              20_000_000, False)
     assert result is None and "Only 24 common daily return" in error
+
+
+def test_market_regime_on_the_synthetic_sample_index():
+    from app.ui.console import (INDEX_SAMPLE_CSV, load_index_data, market_regime,
+                                regime_current_display, regime_history_display)
+
+    imported, error = load_index_data(INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes())
+    assert error is None and imported.index_names == ["ASPI", "S&P SL20"]
+    result, error = market_regime(imported.data, "ASPI")
+    assert error is None and result.required_observations == 141
+    current = dict(zip(*regime_current_display(result).T.values))
+    assert current["Regime"] in {"Normal", "High volatility", "Stress", "Recovery"}
+    assert current["Rolling Volatility (20-day, daily)"] == format_percent(
+        result.current.rolling_volatility)
+    history = regime_history_display(result)
+    assert list(history.columns) == ["Date", "Regime", "Rolling Volatility (20-day, daily)",
+                                     "Current Drawdown", "Trend State"]
+    assert list(history["Regime"][:140]) == ["N/A (warm-up)"] * 140
+    assert {"Normal", "High volatility", "Stress", "Recovery"} <= set(history["Regime"])
+
+
+def test_market_regime_reports_index_and_file_errors():
+    from app.ui.console import INDEX_SAMPLE_CSV, load_index_data, market_regime
+
+    imported, _ = load_index_data(INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes())
+    result, error = market_regime(imported.data, "CSE ALL")
+    assert result is None and "not found" in error
+    none, error = load_index_data("aspi.csv", b"Date,Price\n2026-01-05,100\n")
+    assert none is None and "no Index column" in error
+    named, error = load_index_data("aspi.csv", b"Date,Price\n2026-01-05,100\n", "ASPI")
+    assert error is None and named.index_names == ["ASPI"]
+    short, error = market_regime(named.data, "ASPI")
+    assert error is None and short.current.regime == "N/A"
+    broken, error = load_index_data("aspi.csv", b"Date,Index\n2026-01-05,ASPI\n")
+    assert broken is None and "missing column" in error
+
+
+def test_chosen_index_name_only_applies_to_files_without_an_index_column():
+    from app.ui.console import load_index_data
+
+    named, error = load_index_data("x.csv", b"Date,Index,Close\n2026-01-05,ASPI,100\n",
+                                   "S&P SL20")
+    assert error is None and named.index_names == ["ASPI"]
+    unnamed, error = load_index_data("x.csv", b"Date,Close\n2026-01-05,100\n", "S&P SL20")
+    assert error is None and unnamed.index_names == ["S&P SL20"]
+
+
+def test_parse_sector_mapping():
+    from app.ui.console import parse_sector_mapping
+
+    mapping, error = parse_sector_mapping("abc, Banking Finance & Insurance\nXYZ\tManufacturing\n\n")
+    assert error is None
+    assert mapping == {"ABC": "Banking Finance & Insurance", "XYZ": "Manufacturing"}
+    assert parse_sector_mapping("  ") == (None, None)
+    assert "SYMBOL, Sector" in parse_sector_mapping("ABC")[1]
+    assert "two sectors" in parse_sector_mapping("ABC, Banking\nABC, Hotels")[1]
+
+
+def test_custom_stress_scenario_uses_only_the_components_that_are_set():
+    from app.ui.console import custom_stress_scenario
+
+    assert custom_stress_scenario() == (None, None)
+    market, error = custom_stress_scenario(market_percent=-15)
+    assert error is None and market.scenario_type == "MARKET" and market.market_shock == -0.15
+    combined, _ = custom_stress_scenario(-10, "Banking", -20, 0.0, 0.5)
+    assert combined.scenario_type == "COMBINED"
+    assert combined.components == ("market", "sector", "liquidity")
+    assert custom_stress_scenario(0, "", -5)[1] == "Enter a sector name for the custom sector shock."
+
+
+def test_stress_report_tables_for_the_sample_portfolio():
+    from app.ui.console import (DEFAULT_SCENARIOS, MULTI_SYMBOL_SAMPLE_CSV,
+                                custom_stress_scenario, parse_sector_mapping, stress_impact_display,
+                                stress_liquidity_display, stress_report, stress_summary_display)
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    mapping, _ = parse_sector_mapping("ABC, Banking\nLMN, Banking\nXYZ, Manufacturing")
+    custom, _ = custom_stress_scenario(-10, "banking", -20)
+    report, error = stress_report(data, [("ABC", 0.40), ("XYZ", 0.35), ("LMN", 0.25)],
+                                  20_000_000, list(DEFAULT_SCENARIOS) + [custom], mapping,
+                                  10.0, "zero", 95.0, 20)
+    assert error is None
+    summary = stress_summary_display(report).set_index("Scenario")
+    assert summary.loc["Market -10%", "Portfolio Return"] == "-10.00%"
+    assert summary.loc["Market -10%", "Loss Amount (Rs.)"] == "2,000,000.00"
+    assert summary.loc["Market -30%", "Stressed Portfolio Value (Rs.)"] == "14,000,000.00"
+    assert summary.loc["Custom scenario", "Portfolio Loss"] == "23.00%"
+    impact = stress_impact_display(report.results[-1]).set_index("Symbol")
+    assert list(impact.columns) == ["Sector", "Weight", "Base Return", "Stressed Return",
+                                    "Contribution"]
+    assert impact.loc["XYZ", "Stressed Return"] == "-10.00%"
+    liquidity = stress_liquidity_display(report.results[5])
+    assert list(liquidity.columns) == ["Symbol", "Base ADTV (Rs.)", "Stressed ADTV (Rs.)",
+                                       "ADTV Source", "Base Liquidation Days",
+                                       "Stressed Liquidation Days", "Status"]
+    words = " ".join(map(str, summary.to_numpy().ravel())).upper()
+    assert not any(w in words.split() for w in ("BUY", "SELL", "SAFE"))
+
+
+def test_stress_report_reports_errors():
+    from app.ui.console import DEFAULT_SCENARIOS, MULTI_SYMBOL_SAMPLE_CSV, stress_report
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    report, error = stress_report(data, [("ABC", 0.5), ("QQQ", 0.5)], 1e6, DEFAULT_SCENARIOS,
+                                  None, 10.0, "zero", 95.0, 20)
+    assert report is None and "not found" in error

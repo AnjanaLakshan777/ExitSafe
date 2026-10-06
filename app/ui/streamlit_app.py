@@ -20,22 +20,30 @@ import streamlit as st  # noqa: E402
 from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
+    BASELINE_LABELS,
+    DEFAULT_SCENARIOS,
     EXAMPLE_FILE_NAME,
+    INDEX_SAMPLE_CSV,
+    KNOWN_INDEXES,
     MULTI_SYMBOL_SAMPLE_CSV,
     PASTED_FILE_NAME,
     SAMPLE_CSV,
     SAMPLE_SYMBOL,
+    REGIME_UNDEFINED,
     UPLOAD_TYPES,
     alignment_summary,
     canonical_column_order,
     conditional_value_at_risk,
+    custom_stress_scenario,
     cvar_display,
     default_holdings_text,
     drawdown_chart_data,
     format_percent,
     import_summary,
+    load_index_data,
     liquidity_display,
     liquidity_summary,
+    market_regime,
     matrix_display,
     maximum_drawdown_display,
     optimization_allocation_display,
@@ -43,6 +51,7 @@ from app.ui.console import (  # noqa: E402
     optimization_metrics_display,
     optimize,
     parse_holdings,
+    parse_sector_mapping,
     pasted_bytes,
     portfolio_holdings_display,
     portfolio_risk,
@@ -50,11 +59,17 @@ from app.ui.console import (  # noqa: E402
     position_display,
     position_liquidity,
     ratios_display,
+    regime_current_display,
+    regime_history_display,
     risk_adjusted_ratios,
     value_at_risk,
     var_display,
     run_import,
     status_level,
+    stress_impact_display,
+    stress_liquidity_display,
+    stress_report,
+    stress_summary_display,
     uses_estimated_traded_value,
     volatility_display,
 )
@@ -62,6 +77,8 @@ from app.ui.console import (  # noqa: E402
 UPLOAD_OR_PASTE = "Upload or paste data"
 SAMPLE_ONE = f"Sample: one stock ({SAMPLE_SYMBOL})"
 SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
+INDEX_SAMPLE = "Sample: synthetic index series (ASPI, S&P SL20 names)"
+INDEX_UPLOAD = "Upload index CSV"
 
 
 def main():
@@ -124,8 +141,10 @@ def main():
     confidence, minimum = show_var(outcome)
     show_cvar(outcome, confidence, minimum)
     participation = show_liquidity(outcome)
-    value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
+    holdings, value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
     show_optimization(outcome, confidence, minimum, periods, value, participation)
+    show_market_regime()
+    show_stress_testing(outcome, holdings, value, confidence, minimum, participation)
 
 
 def show_import(result):
@@ -430,12 +449,12 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
     holdings, error = parse_holdings(holdings_text)
     if error:
         st.error(error)
-        return value
+        return None, value
     result, error = portfolio_risk(data, holdings, value, confidence, minimum, periods,
                                    participation)
     if error:
         st.error(error)
-        return value
+        return None, value
     if result.observations < 2:
         st.warning(f"Fewer than 2 common return observations ({result.observations}): portfolio "
                    "statistics are n/a.")
@@ -471,7 +490,7 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
             "- These figures describe the past at constant weights. There is no rebalancing, "
             "transaction cost or market impact, and they are not a buy or sell "
             "recommendation.")
-    return value
+    return holdings, value
 
 
 def show_optimization(outcome, confidence, minimum, periods, portfolio_value, participation):
@@ -543,6 +562,177 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
             "constraint, an error explains which constraint cannot be met.\n"
             "- There are no transaction costs, market impact or rebalancing in this model, and "
             "the allocation is a quantitative result, not a buy or sell recommendation.")
+
+
+def show_market_regime():
+    st.divider()
+    st.subheader("Market Regime")
+    st.caption("Uses a market-index series (for example ASPI or S&P SL20), separate from the "
+               "stock data above.")
+    source = st.radio("Index data", [INDEX_SAMPLE, INDEX_UPLOAD], horizontal=True)
+    chosen = None
+    if source == INDEX_SAMPLE:
+        st.info("Synthetic sample: invented values for testing the section. They are not real "
+                "ASPI or S&P SL20 index levels.")
+        file_name, content = INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes()
+    else:
+        uploaded = st.file_uploader("Index CSV (Date, Index, Close or Price)", type=UPLOAD_TYPES,
+                                    key="index_upload")
+        chosen = st.selectbox("Index name (used only when the file has no Index column)",
+                              KNOWN_INDEXES)
+        if uploaded is None:
+            st.info("Upload an index price file to see its market regime.")
+            return
+        file_name, content = uploaded.name, uploaded.getvalue()
+
+    imported, error = load_index_data(file_name, content, chosen)
+    if error:
+        st.error(error)
+        return
+    if imported.invalid_rows:
+        issues = ", ".join(f"{code} {count}" for code, count in imported.issue_counts.items())
+        st.warning(f"{imported.invalid_rows} INVALID row(s) are excluded (never bridged): "
+                   f"{issues}.")
+
+    names = imported.index_names
+    if len(names) == 1:
+        index_name = names[0]
+        st.markdown(f"Index: **{index_name}**")
+    else:
+        index_name = st.selectbox("Index", names)
+    result, error = market_regime(imported.data, index_name)
+    if error:
+        st.error(error)
+        return
+
+    if result.current.regime == REGIME_UNDEFINED:
+        st.warning(f"Warm-up: {index_name} has {result.observations} usable observation(s); a "
+                   f"regime needs at least {result.required_observations}. Regime: N/A.")
+    else:
+        st.caption(f"The first {result.warm_up_rows} observation(s) are warm-up (N/A); regimes "
+                   f"start on {result.first_classified_date.date()}.")
+    st.table(regime_current_display(result).astype(str))
+    st.line_chart(result.history.set_index("date")["close"].rename(f"{index_name} close"))
+
+    st.markdown("**Historical Regime Table**")
+    st.dataframe(regime_history_display(result), hide_index=True)
+    t = result.thresholds
+    st.caption(f"Settings (model assumptions): volatility {result.volatility_window} days vs "
+               f"baseline {result.baseline_window} days; elevated above {t.elevated_volatility_ratio:g}×, "
+               f"high above {t.high_volatility_ratio:g}×; trend band ±{t.neutral_band:.0%} around "
+               f"the {result.trend_window}-day average; stress at a {t.stress_drawdown:.0%} drawdown "
+               f"from the {result.drawdown_lookback}-day peak or close ≤ {t.strong_downtrend_ratio:g}× "
+               f"the average; recovery window {t.recovery_lookback} days.")
+
+    with st.expander("What does the market regime mean?"):
+        st.markdown(
+            "- **Market regime describes the current market environment based on volatility, "
+            "drawdown and trend.** It describes the past data; it does not predict future "
+            "prices, and it does not change any portfolio weights.\n"
+            "- **Normal**: none of the conditions below. Volatility is near its usual level "
+            "(the trend can still be up, down or neutral).\n"
+            "- **High volatility**: recent volatility is clearly above its longer-run baseline, "
+            "but the market has not fallen far enough for stress.\n"
+            "- **Stress**: volatility is high **and** the index is well below its recent peak "
+            "or well below its moving average.\n"
+            "- **Recovery**: volatility was elevated recently and is now falling, the index is "
+            "no longer in a downtrend, and it is still below its recent peak.\n"
+            "- **N/A (warm-up)**: not enough history yet for every rolling window, so no "
+            "regime is shown rather than a false Normal.\n"
+            "- The rules are checked in the order Stress, Recovery, High volatility, Normal. All "
+            "thresholds are configurable model assumptions, not market rules.")
+
+
+def show_stress_testing(outcome, holdings, portfolio_value, confidence, minimum, participation):
+    st.divider()
+    st.subheader("Stress Testing")
+    st.caption("Hypothetical adverse scenarios for the holdings entered in Portfolio Risk "
+               f"Analysis (Portfolio Value Rs. {portfolio_value:,.2f}). These are assumptions, "
+               "not forecasts.")
+    if holdings is None:
+        st.info("Enter valid holdings in Portfolio Risk Analysis to run the stress tests.")
+        return
+
+    baseline = st.radio("Base return", list(BASELINE_LABELS), horizontal=True,
+                        format_func=BASELINE_LABELS.get)
+    sector_text = st.text_area("Sector mapping (optional, one per line: Symbol, Sector)",
+                               value="", height=100)
+    sector_mapping, error = parse_sector_mapping(sector_text)
+    if error:
+        st.error(error)
+        return
+    if sector_mapping is None:
+        st.caption("No sector mapping entered: sector shocks are unavailable (sectors are never "
+                   "guessed).")
+
+    st.markdown("**Custom scenario** (leave a field at its default to switch it off)")
+    first, second, third = st.columns(3)
+    market_percent = first.number_input("Market shock (%)", value=0.0, step=1.0,
+                                        min_value=-100.0, max_value=100.0, format="%.2f")
+    sector_percent = second.number_input("Sector shock (%)", value=0.0, step=1.0,
+                                         min_value=-100.0, max_value=100.0, format="%.2f")
+    sector_name = third.text_input("Sector", value="")
+    fourth, fifth = st.columns(2)
+    volatility = fourth.number_input("Volatility multiplier (0 = off)", value=0.0, step=0.5,
+                                     min_value=0.0, format="%.2f")
+    liquidity = fifth.number_input("Liquidity multiplier (1 = off)", value=1.0, step=0.1,
+                                   min_value=0.01, max_value=1.0, format="%.2f")
+    custom, error = custom_stress_scenario(market_percent, sector_name, sector_percent,
+                                           volatility, liquidity)
+    if error:
+        st.error(error)
+        return
+    scenarios = list(DEFAULT_SCENARIOS) + ([custom] if custom is not None else [])
+
+    report, error = stress_report(outcome.import_result.data, holdings, portfolio_value,
+                                  scenarios, sector_mapping, participation, baseline,
+                                  confidence, minimum)
+    if error:
+        st.error(error)
+        return
+    st.markdown(f"Historical 1-day VaR: **{format_percent(report.historical_var)}** · "
+                f"Historical 1-day CVaR: **{format_percent(report.historical_cvar)}** "
+                f"({report.confidence_level:.0%} confidence, {report.historical_observations} "
+                "past days). These come from past returns; the scenario losses below are "
+                "hypothetical and are not a stressed VaR or CVaR.")
+    st.table(stress_summary_display(report).astype(str))
+    for result in report.results:
+        if result.status != "OK":
+            st.warning(f"{result.scenario_name}: {result.message}")
+        for note in result.warnings:
+            st.info(f"{result.scenario_name}: {note}")
+
+    names = [r.scenario_name for r in report.results]
+    chosen = st.selectbox("Scenario details", names,
+                          index=len(names) - 1 if custom is not None else 0)
+    result = report.results[names.index(chosen)]
+    st.caption(result.description)
+    if result.status == "OK":
+        st.markdown("**Stock Impact Table**")
+        st.table(stress_impact_display(result).astype(str))
+        if result.liquidity_impacts is not None:
+            st.markdown("**Liquidity Impact**")
+            st.table(stress_liquidity_display(result).astype(str))
+    with st.expander("Assumptions for this scenario"):
+        st.markdown("\n".join(f"- {note}" for note in result.assumptions))
+
+    with st.expander("What is stress testing?"):
+        st.markdown(
+            "- **Stress testing asks what could happen under a hypothetical adverse "
+            "scenario.** It applies a chosen shock to the portfolio's holdings.\n"
+            "- **These scenarios are assumptions, not forecasts.** No probability is attached, "
+            "and they are not calibrated to past events.\n"
+            "- **A market shock changes the assumed return environment.** It is an absolute "
+            "return shock added to each holding's base return: a -10% shock turns +2% into "
+            "-8%. A sector shock applies only to holdings mapped to that sector.\n"
+            "- **A volatility shock** moves every holding down by the chosen number of its own "
+            "daily standard deviations on the same day (no diversification).\n"
+            "- **A liquidity shock changes assumed trading capacity**, not prices: ADTV is "
+            "multiplied by the liquidity multiplier and the liquidation days are recalculated.\n"
+            "- The portfolio return is the weighted sum of the holdings' stressed returns; "
+            "each holding's contribution is weight × stressed return.\n"
+            "- Historical VaR/CVaR describe past daily returns; a scenario loss is a separate, "
+            "hypothetical number. Neither is a buy or sell recommendation.")
 
 
 if __name__ == "__main__":
