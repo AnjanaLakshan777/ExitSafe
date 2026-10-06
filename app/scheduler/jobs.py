@@ -8,6 +8,9 @@ from app.intelligence.collectors.market_event_collector import collect_market_ev
 from app.intelligence.collectors.news_collector import collect_news
 from app.intelligence.collectors.threat_intel_collector import collect_threat_intel
 from app.intelligence.models import Collector
+from app.intelligence.price_updater import update_tracked_csv
+from app.intelligence.settings import load_settings
+from app.intelligence.threat_scan import run_threat_scan
 
 COLLECTORS: tuple[Collector, ...] = (
     collect_company_disclosures,
@@ -25,13 +28,17 @@ class Job:
 
 
 def collect_intelligence():
-    """Run every collector, then parse, classify and store the new events."""
-    raise NotImplementedError("Intelligence collection job is not implemented yet")
+    """Scan news for world-market threats, store them and email alerts.
+
+    Only the news (and Gemini web search) collectors are live; the other
+    COLLECTORS above are not implemented yet.
+    """
+    run_threat_scan(load_settings())
 
 
 def refresh_market_data():
-    """Load the latest market-data files into the processed store."""
-    raise NotImplementedError("Market data refresh job is not implemented yet")
+    """Append the latest session's prices to the tracked market-data CSV."""
+    update_tracked_csv(load_settings())
 
 
 def archive_events():

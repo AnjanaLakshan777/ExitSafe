@@ -3,7 +3,7 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from app._compat import StrEnum
 
 from app.data.schemas.checks import require_aware, require_enum, require_text
 from app.data.schemas.event_schema import SourceType

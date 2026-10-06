@@ -7,7 +7,7 @@ Events are immutable: an assessment creates a new copy. Only an official source
 import hashlib
 from dataclasses import dataclass, fields
 from datetime import datetime
-from enum import StrEnum
+from app._compat import StrEnum
 
 from app.data.schemas.checks import require_aware, require_enum, require_text, validate_confidence
 

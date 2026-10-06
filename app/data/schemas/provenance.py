@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field, fields
 from datetime import date, datetime, timezone
-from enum import StrEnum
+from app._compat import StrEnum
 from pathlib import Path
 
 from app.data.schemas.checks import require_aware, require_enum, require_text
