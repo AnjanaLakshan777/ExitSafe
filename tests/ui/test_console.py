@@ -233,3 +233,28 @@ def test_invalid_ratio_inputs_return_a_message():
     data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
     ratios, error = risk_adjusted_ratios(data, -150.0, 252)
     assert ratios is None and "risk_free_rate" in error
+
+
+def test_value_at_risk_takes_percent_input_and_flags_small_samples():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, value_at_risk, var_display
+
+    three = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    summary, error = value_at_risk(three, 99.0, 20)
+    assert error is None and summary["sufficient_data"].all()
+    assert (summary["confidence_level"] == 0.99).all()
+    shown = var_display(summary)
+    assert list(shown["Confidence"]) == ["99%"] * 3
+    assert all(v.endswith("%") for v in shown["Historical VaR"])
+
+    one = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    small, _ = value_at_risk(one, 95.0, 20)
+    assert not small["sufficient_data"].any()
+    assert list(var_display(small)["Historical VaR"]) == ["n/a"]
+
+
+def test_invalid_var_inputs_return_a_message():
+    from app.ui.console import value_at_risk
+
+    data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    summary, error = value_at_risk(data, 100.0, 20)
+    assert summary is None and "confidence_level" in error

@@ -21,6 +21,7 @@ from app.analytics.covariance import (
 )
 from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
 from app.analytics.ratios import calculate_risk_adjusted_ratios
+from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
@@ -249,4 +250,25 @@ def ratios_display(ratios):
         "Sharpe Ratio": [ratio(v) for v in ratios["sharpe_ratio"]],
         "Downside Deviation": [format_percent(v) for v in ratios["downside_deviation"]],
         "Sortino Ratio": [ratio(v) for v in ratios["sortino_ratio"]],
+    })
+
+
+def value_at_risk(data, confidence_percent, min_observations):
+    """(VaR summary, error message). Confidence is entered in percent (95.0 = 95%)."""
+    try:
+        return calculate_var_summary(data, confidence_level=confidence_percent / 100,
+                                     min_observations=int(min_observations)), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def var_display(summary):
+    """A new, display-only VaR table (losses as positive percentages)."""
+    return pd.DataFrame({
+        "Symbol": summary["symbol"],
+        "Observations": summary["observations"],
+        "Minimum required": summary["min_observations"],
+        "Confidence": [f"{c * 100:g}%" for c in summary["confidence_level"]],
+        "Historical VaR": [format_percent(v) for v in summary["historical_var"]],
+        "Parametric VaR": [format_percent(v) for v in summary["parametric_var"]],
     })

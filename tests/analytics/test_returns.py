@@ -65,3 +65,13 @@ def test_canonical_input_is_not_mutated():
 def test_missing_columns_name_both_layouts():
     with pytest.raises(ValueError, match="close \\(canonical layout\\).*Close \\(Phase 1"):
         calculate_daily_returns(canonical([100, 101]).drop(columns="close"))
+
+
+def test_rows_without_a_date_get_no_return():
+    # Unvalidated data: the undated row sorts last and must not be compared
+    # with the last dated close.
+    data = canonical([100, 102, 999])
+    data.loc[2, "date"] = pd.NaT
+    result = calculate_daily_returns(data)
+    assert result[CANONICAL_DAILY_RETURN].notna().sum() == 1
+    assert result.loc[1, CANONICAL_DAILY_RETURN] == pytest.approx(0.02)

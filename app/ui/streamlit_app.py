@@ -36,6 +36,8 @@ from app.ui.console import (  # noqa: E402
     pasted_bytes,
     ratios_display,
     risk_adjusted_ratios,
+    value_at_risk,
+    var_display,
     run_import,
     status_level,
     volatility_display,
@@ -103,6 +105,7 @@ def main():
     show_covariance(outcome)
     show_drawdown(outcome)
     show_ratios(outcome)
+    show_var(outcome)
 
 
 def show_import(result):
@@ -269,6 +272,43 @@ def show_ratios(outcome):
             "the chosen assumptions. They describe the past and are not a buy or sell signal.\n"
             "- n/a means fewer than 2 returns, no variation (Sharpe), or no return below the "
             "risk-free rate (Sortino).")
+
+
+def show_var(outcome):
+    st.divider()
+    st.subheader("Value at Risk (VaR)")
+    left, right = st.columns(2)
+    confidence = left.number_input("Confidence Level (%)", value=95.0, step=1.0, format="%.2f",
+                                   min_value=0.01, max_value=99.99)
+    minimum = right.number_input("Minimum Observations", value=20, step=1, min_value=2)
+    st.caption("1-day horizon, per stock. VaR is shown as a positive loss.")
+
+    summary, error = value_at_risk(outcome.import_result.data, confidence, minimum)
+    if error:
+        st.error(error)
+        return
+    for row in summary[~summary["sufficient_data"]].itertuples():
+        st.warning(f"Insufficient historical observations for reliable VaR — **{row.symbol}**: "
+                   f"Observations: {row.observations}, Minimum required: {row.min_observations}. "
+                   "VaR: n/a")
+    st.table(var_display(summary).astype(str))
+
+    with st.expander("What does VaR mean?"):
+        st.markdown(
+            "- **Historical VaR** uses the observed historical return distribution: the loss at "
+            "the chosen lower-tail percentile of past daily returns (linear interpolation "
+            "between observations).\n"
+            "- **Parametric VaR** assumes returns are approximately normally distributed: "
+            "−(mean + z × standard deviation), with z from the normal distribution. Real "
+            "returns often have fatter tails, so this is an assumption, not a fact.\n"
+            "- Example: a **95% 1-day VaR of 3%** means that, based on the selected method and "
+            "historical data/model, the estimated 1-day loss threshold is about 3% at 95% "
+            "confidence. It is not the maximum possible loss.\n"
+            "- VaR does **not** describe how large the loss could be once VaR is exceeded. That "
+            "limitation is what the next metric, **CVaR**, addresses.\n"
+            "- A small sample says little about rare events, so VaR is shown only when a stock "
+            "has at least the minimum number of daily returns. INVALID rows never enter the "
+            "returns.")
 
 
 if __name__ == "__main__":

@@ -54,12 +54,15 @@ def calculate_daily_returns(data):
 def _canonical_daily_returns(data):
     result = data.sort_values(["symbol", "date"], kind="stable").reset_index(drop=True)
     returns = _simple_returns(result, "symbol", "close")
+    # A row is usable if it has a date and is not INVALID. Rows without a date
+    # sort last and must not get a return against the last dated row (validated
+    # data already marks them INVALID; this also covers unvalidated frames).
+    usable = result["date"].notna()
     if "validation_status" in result.columns:
-        usable = result["validation_status"].astype("string").ne(_INVALID).fillna(True)
-        previous_usable = usable.groupby(result["symbol"], sort=False).shift(1)
-        both_usable = usable & previous_usable.astype("boolean").fillna(False)
-        returns = returns.where(both_usable)
-    result[CANONICAL_DAILY_RETURN] = returns
+        usable &= result["validation_status"].astype("string").ne(_INVALID).fillna(True)
+    previous_usable = usable.groupby(result["symbol"], sort=False).shift(1)
+    both_usable = usable & previous_usable.astype("boolean").fillna(False)
+    result[CANONICAL_DAILY_RETURN] = returns.where(both_usable)
     return result
 
 

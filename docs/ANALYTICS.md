@@ -11,7 +11,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 3 | Covariance / correlation (`app/analytics/covariance.py`) | implemented |
 | 4 | Maximum drawdown (`app/analytics/drawdown.py`) | implemented |
 | 5 | Sharpe / Sortino ratios (`app/analytics/ratios.py`) | implemented |
-| 6–13 | VaR, CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 6 | Value at Risk, stock-level 1-day (`app/analytics/var.py`) | implemented |
+| 7–13 | CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -29,6 +30,8 @@ return, computed separately for each symbol.
   rows are usable (VALID or WARNING). An INVALID row is never dropped and
   bridged over, which would turn two trading days into one return. Without a
   `validation_status` column, the data is assumed to be validated already.
+- **Rows without a date** are treated like INVALID rows, so they get no return
+  even in unvalidated data.
 - **Phase 1 layout:** the older `Date`/`Symbol`/`Close` layout from
   `app/data/loaders/market_data.py` is still accepted and gets a
   `Daily Return` column.
@@ -338,3 +341,105 @@ Sortino                        = annualized excess return / downside deviation
 | Sharpe | 1.512 / 0.329181 = **4.5932** | **4.4450** |
 | downside deviation | √((0.01² + 0.02²) / 5) × √252 = 0.158745 | 0.160591 |
 | Sortino | 1.512 / 0.158745 = **9.5247** | **9.1114** |
+
+## 6. Value at Risk (VaR)
+
+Stock-level, **1-day** VaR, per symbol. Two methods are implemented: historical
+and parametric (Normal). Portfolio VaR, Monte Carlo VaR and CVaR are not
+implemented yet.
+
+**What it means.** At confidence C, the 1-day VaR is the loss threshold that,
+**under the chosen method and data**, is expected to be exceeded on only about
+(1 − C) of days.
+- **Example:** a 95% 1-day VaR of 3% means "based on the selected method and
+  historical data/model, the estimated 1-day loss threshold is about 3% at 95%
+  confidence".
+- **It is not the maximum possible loss.** It also says nothing about how large
+  a loss is once the threshold is exceeded; that is what **CVaR** (next module)
+  measures.
+
+**Sign convention:** VaR is a **positive loss magnitude**. `0.032` means a 3.2%
+one-day loss threshold, never `-0.032`. If even the lower tail of the sample is
+a gain (e.g. only positive returns), VaR comes out negative. It is reported as
+calculated, not floored at 0.
+
+```python
+from app.analytics.var import (
+    calculate_var_summary,      # symbol, observations, min_observations, sufficient_data,
+                                # confidence_level, historical_var, parametric_var
+    calculate_historical_var,
+    calculate_parametric_var,
+)
+
+calculate_var_summary(data, confidence_level=0.95, min_observations=20)
+```
+
+**Formulas** (C = confidence level, α = 1 − C, r = daily returns of one symbol)
+
+```
+historical VaR = −quantile(r, α)
+parametric VaR = −(mean(r) + z_α × std(r))     z_α = scipy.stats.norm.ppf(α), negative for α < 0.5
+                                               std with ddof = 1 (as in volatility)
+```
+
+- **Historical quantile method:** `numpy.quantile(method="linear")`
+  (Hyndman & Fan type 7), passed explicitly and never left to a library
+  default.
+  - Sort the returns x₀ … xₙ₋₁ and set h = (n − 1)α.
+  - The quantile is x⌊h⌋ + (h − ⌊h⌋)(x⌊h⌋₊₁ − x⌊h⌋).
+- **z is computed from the normal distribution,** not hard-coded, so any
+  confidence works (e.g. 93.7%).
+- **Confidence** must be a finite number strictly between 0 and 1. 0.95 and
+  0.99 are typical, but any value in that range is accepted.
+
+**Assumptions and comparison**
+
+| | Historical VaR | Parametric VaR |
+|---|---|---|
+| Distribution | the observed returns, as they are | **assumes** returns are approximately normal (real returns often have fatter tails) |
+| Depends on | the sample; tail values come from few observations | only the mean and standard deviation of the sample |
+| Constant returns | the constant (negated) | −mean, since σ = 0 |
+
+The two methods use **exactly the same returns** for a symbol and can give
+different results.
+
+**Sample size.**
+- **Minimum:** a symbol needs at least `min_observations` usable daily returns
+  (**default 20**, configurable, at least 2). Otherwise both VaRs are **NaN**,
+  never 0, and `observations` shows how many were available.
+- **20 returns is still a small sample:** a 99% VaR from 20 returns depends on
+  the one or two worst days.
+
+**Data handling:**
+- Returns come from `calculate_daily_returns`.
+- INVALID rows give no returns and are never bridged.
+- Rows without a date give no returns.
+- WARNING rows count.
+- The first return of each symbol and non-finite returns are excluded.
+- Each symbol is independent, and the input is not modified.
+
+**Limitations:**
+- 1-day horizon only.
+- Single stocks only: no diversification or portfolio effects.
+- Prices aren't adjusted for dividends or splits.
+- No check of how well the VaR would have predicted past losses (no
+  backtesting).
+- The parametric normal assumption can understate tail risk.
+
+**VaR vs CVaR.** VaR is a threshold: "losses are expected to exceed X on about
+5% of days". CVaR (expected shortfall) is the **average loss on those worst
+days**, so it shows how bad the tail is beyond the threshold.
+
+**Worked example** (20 synthetic daily returns: 0.02, −0.01, 0.03, −0.02, 0.01,
+−0.05, 0.015, −0.01, 0.005, −0.03, 0.012, −0.008, 0.025, −0.015, 0.004,
+−0.022, 0.018, −0.006, 0.009, −0.04):
+
+| | 95% (α = 0.05) | 99% (α = 0.01) |
+|---|---|---|
+| Two lowest returns | −0.05, −0.04 | −0.05, −0.04 |
+| h = 19α | 0.95 | 0.19 |
+| Lower-tail quantile | −0.05 + 0.95 × 0.01 = −0.0405 | −0.05 + 0.19 × 0.01 = −0.0481 |
+| **Historical VaR** | **4.05%** | **4.81%** |
+| Mean / sample std | −0.00315 / 0.0218253 | same |
+| z_α | −1.6448536 | −2.3263479 |
+| **Parametric VaR** = −(−0.00315 + z × 0.0218253) | **3.9049%** | **5.3923%** |
