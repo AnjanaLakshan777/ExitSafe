@@ -21,26 +21,35 @@ from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
     EXAMPLE_FILE_NAME,
+    MULTI_SYMBOL_SAMPLE_CSV,
     PASTED_FILE_NAME,
     SAMPLE_CSV,
     SAMPLE_SYMBOL,
     UPLOAD_TYPES,
+    alignment_summary,
     canonical_column_order,
     format_percent,
     import_summary,
+    matrix_display,
     pasted_bytes,
     run_import,
     status_level,
     volatility_display,
 )
 
+UPLOAD_OR_PASTE = "Upload or paste data"
+SAMPLE_ONE = f"Sample: one stock ({SAMPLE_SYMBOL})"
+SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
+
 
 def main():
     st.set_page_config(page_title="ExitSafe - Analytics Test Console")
     st.title("ExitSafe — Analytics Test Console")
-    st.caption("Manual verification of market-data import and volatility analysis")
+    st.caption("Manual verification of market-data import, volatility and "
+               "covariance/correlation analysis")
 
-    use_sample = st.checkbox(f"Use sample CSV (synthetic test data, symbol {SAMPLE_SYMBOL})")
+    source = st.radio("Data", [UPLOAD_OR_PASTE, SAMPLE_ONE, SAMPLE_THREE], horizontal=True)
+    use_sample = source != UPLOAD_OR_PASTE
     uploaded = st.file_uploader("Upload CSV (comma, tab, semicolon or pipe separated)",
                                 type=UPLOAD_TYPES, disabled=use_sample)
     pasted = st.text_area("...or paste data, header row included (e.g. copied from a spreadsheet "
@@ -48,14 +57,17 @@ def main():
     st.download_button("Download a synthetic example CSV", EXAMPLE_CSV,
                        file_name=EXAMPLE_FILE_NAME, mime="text/csv")
 
-    if use_sample:
+    if source == SAMPLE_ONE:
         name, content, symbol = SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL
+    elif source == SAMPLE_THREE:
+        name, content, symbol = (MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes(),
+                                 None)
     elif uploaded is not None:
         name, content, symbol = uploaded.name, uploaded.getvalue(), None
     elif pasted_bytes(pasted):
         name, content, symbol = PASTED_FILE_NAME, pasted_bytes(pasted), None
     else:
-        st.info("Upload or paste data, or tick 'Use sample CSV', to begin.")
+        st.info("Upload or paste data, or choose a sample above, to begin.")
         return
 
     # A Symbol column in the data is used as-is. Without one, ask the user:
@@ -84,6 +96,7 @@ def main():
         return
     show_returns(outcome.returns)
     show_volatility(outcome.volatility)
+    show_covariance(outcome)
 
 
 def show_import(result):
@@ -147,6 +160,44 @@ def show_volatility(volatility):
             "- Percentages are rounded for display only; the calculations are not rounded.\n"
             "- Volatility describes how much returns varied in the past. On its own it does "
             "not mean the investment will lose money.")
+
+
+def show_covariance(outcome):
+    info = outcome.alignment
+    st.divider()
+    st.subheader("Covariance / Correlation")
+    st.table(pd.DataFrame(alignment_summary(info), columns=["Item", "Value"]).astype(str))
+    if len(info["symbols"]) == 1:
+        st.info("Only one symbol: the matrices are 1 × 1 (its variance and self-correlation). "
+                "Use data with several symbols to compare stocks.")
+    if info["observations"] < 2:
+        st.warning("Fewer than 2 common return observations: covariance and correlation "
+                   "cannot be calculated and are shown as n/a.")
+
+    st.markdown("**Daily Covariance Matrix**")
+    st.dataframe(matrix_display(outcome.covariance, 8))
+    st.markdown(f"**Annualized Covariance Matrix** (daily covariance × {TRADING_DAYS_PER_YEAR})")
+    st.dataframe(matrix_display(outcome.annualized_covariance, 8))
+    st.markdown("**Correlation Matrix**")
+    st.dataframe(matrix_display(outcome.correlation, 4))
+
+    with st.expander("What do covariance and correlation mean?"):
+        st.markdown(
+            "- **Covariance** shows how two stocks' returns move together. The diagonal is each "
+            "stock's variance.\n"
+            "- **Correlation** shows the strength and direction of that relationship on a "
+            "scale from −1 to +1:\n"
+            "  - **+1**: the returns move together strongly\n"
+            "  - **0**: little or no linear relationship\n"
+            "  - **−1**: the returns move in opposite directions strongly\n"
+            "- Both use daily returns and the sample formula (divides by *n − 1*), on dates "
+            "where every symbol has a return for the same period.\n"
+            f"- Annualized covariance = daily covariance × {TRADING_DAYS_PER_YEAR} (not "
+            f"√{TRADING_DAYS_PER_YEAR}, which is used for volatility). Correlation is not "
+            "annualized.\n"
+            "- n/a means there was not enough data, or a stock's returns never changed.\n"
+            "- Covariance will later be used to measure portfolio risk and to optimize "
+            "portfolios.")
 
 
 if __name__ == "__main__":

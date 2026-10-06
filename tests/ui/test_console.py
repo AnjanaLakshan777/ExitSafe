@@ -146,3 +146,37 @@ def test_pasted_tab_separated_text_is_imported():
 def test_empty_paste_is_ignored(text):
     from app.ui.console import pasted_bytes
     assert pasted_bytes(text) is None
+
+
+def test_three_symbol_sample_produces_covariance_and_correlation():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, alignment_summary
+
+    outcome = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes())
+
+    assert outcome.error is None
+    for matrix in (outcome.covariance, outcome.annualized_covariance, outcome.correlation):
+        assert list(matrix.index) == list(matrix.columns) == ["ABC", "LMN", "XYZ"]
+    assert outcome.annualized_covariance.equals(outcome.covariance * 252)
+    summary = dict(alignment_summary(outcome.alignment))
+    assert summary["Symbols"] == "ABC, LMN, XYZ"
+    assert summary["Common return observations used"] == 24
+    assert summary["Date range used"] == "2026-01-05 to 2026-02-05"
+
+
+def test_single_symbol_sample_gives_one_by_one_matrices():
+    outcome = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL)
+    assert outcome.covariance.shape == outcome.correlation.shape == (1, 1)
+    assert outcome.correlation.iloc[0, 0] == 1.0
+
+
+def test_matrix_display_formats_without_changing_values():
+    from app.ui.console import matrix_display
+
+    matrix = pd.DataFrame([[0.000123456789, float("nan")], [float("nan"), 1.0]],
+                          index=["A", "B"], columns=["A", "B"])
+    before = matrix.copy()
+
+    html = matrix_display(matrix, 8).to_html()
+
+    pd.testing.assert_frame_equal(matrix, before)
+    assert "0.00012346" in html and "n/a" in html and "1.00000000" in html

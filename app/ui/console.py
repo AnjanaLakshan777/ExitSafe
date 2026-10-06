@@ -13,6 +13,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.analytics.covariance import (
+    calculate_annualized_covariance_matrix,
+    calculate_correlation_matrix,
+    calculate_covariance_matrix,
+    describe_return_alignment,
+)
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
@@ -24,6 +30,8 @@ from app.data.loaders.csv_market_loader import (
 
 SAMPLE_CSV = PROJECT_ROOT / "tests" / "fixtures" / "synthetic_date_price_vol_change.csv"
 SAMPLE_SYMBOL = "TEST.N0000"
+# Synthetic 3-symbol data (ABC, LMN, XYZ) with a Symbol column, for the matrices.
+MULTI_SYMBOL_SAMPLE_CSV = PROJECT_ROOT / "data" / "sample" / "sample_market_data.csv"
 
 CANONICAL_KEY_COLUMNS = ["date", "symbol", "open", "high", "low", "close", "volume", "change_pct",
                          "turnover", "estimated_traded_value", "validation_status",
@@ -49,6 +57,10 @@ class ConsoleOutcome:
     import_result: object | None = None   # MarketImportResult
     returns: pd.DataFrame | None = None
     volatility: pd.DataFrame | None = None
+    alignment: dict | None = None                    # common return observations used
+    covariance: pd.DataFrame | None = None           # daily
+    annualized_covariance: pd.DataFrame | None = None
+    correlation: pd.DataFrame | None = None
     error: str | None = None              # short, user-facing
     error_detail: str | None = None       # technical detail, shown only on request
     needs_symbol: bool = False            # data has no Symbol column: ask the user for one
@@ -84,6 +96,10 @@ def run_import(file_name, content, symbol=None):
         import_result=result,
         returns=calculate_daily_returns(result.data)[RETURN_COLUMNS],
         volatility=calculate_annualized_volatility(result.data),
+        alignment=describe_return_alignment(result.data),
+        covariance=calculate_covariance_matrix(result.data),
+        annualized_covariance=calculate_annualized_covariance_matrix(result.data),
+        correlation=calculate_correlation_matrix(result.data),
     )
 
 
@@ -156,3 +172,22 @@ def _vol_text(value):
     text = format_percent(value)
     return "n/a (needs at least 2 usable returns)" if text == "n/a" else text
 
+
+
+def alignment_summary(info):
+    """(label, value) rows describing the data behind the covariance/correlation matrices."""
+    start, end = info["start_date"], info["end_date"]
+    per_symbol = ", ".join(f"{s}: {n}" for s, n in info["returns_per_symbol"].items())
+    return [
+        ("Symbols", ", ".join(info["symbols"]) or "none"),
+        ("Common return observations used", info["observations"]),
+        ("Date range used", f"{start.date()} to {end.date()}" if start is not None else "none"),
+        ("Usable daily returns per symbol", per_symbol or "none"),
+        ("Dates left out: a symbol had no usable return", info["excluded_missing"]),
+        ("Dates left out: returns covered different periods", info["excluded_misaligned"]),
+    ]
+
+
+def matrix_display(matrix, decimals):
+    """Display-only formatting of a covariance/correlation matrix (values untouched)."""
+    return matrix.style.format(f"{{:.{decimals}f}}", na_rep="n/a")

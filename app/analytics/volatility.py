@@ -16,13 +16,12 @@ itself, an expected loss.
 import numpy as np
 import pandas as pd
 
-from app.analytics.returns import (
-    CANONICAL_DAILY_RETURN,
-    CANONICAL_REQUIRED_COLUMNS,
-    calculate_daily_returns,
+from app.analytics.common import (  # noqa: F401  (TRADING_DAYS_PER_YEAR re-exported)
+    TRADING_DAYS_PER_YEAR,
+    require_canonical_columns,
+    validate_periods_per_year,
 )
-
-TRADING_DAYS_PER_YEAR = 252
+from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 
 
 def calculate_daily_volatility(data):
@@ -36,9 +35,7 @@ def calculate_daily_volatility(data):
       observations      number of usable daily returns
       daily_volatility  sample standard deviation of those returns (NaN if < 2)
     """
-    missing = [col for col in CANONICAL_REQUIRED_COLUMNS if col not in data.columns]
-    if missing:
-        raise ValueError(f"Cannot calculate volatility, missing column(s): {', '.join(missing)}")
+    require_canonical_columns(data, "volatility")
 
     returns = calculate_daily_returns(data)
     usable = returns[CANONICAL_DAILY_RETURN].where(np.isfinite(returns[CANONICAL_DAILY_RETURN]))
@@ -62,9 +59,7 @@ def calculate_annualized_volatility(data, periods_per_year=TRADING_DAYS_PER_YEAR
     Output: the columns of ``calculate_daily_volatility`` plus
     ``annualized_volatility`` and ``periods_per_year``.
     """
-    if (isinstance(periods_per_year, bool) or not isinstance(periods_per_year, (int, float))
-            or not periods_per_year > 0):
-        raise ValueError(f"periods_per_year must be a positive number, got {periods_per_year!r}")
+    validate_periods_per_year(periods_per_year)
 
     result = calculate_daily_volatility(data)
     result["annualized_volatility"] = result["daily_volatility"] * np.sqrt(periods_per_year)
