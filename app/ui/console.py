@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.backtesting.backtest_engine import BacktestConfig, run_walk_forward_backtest
 from app.analytics.covariance import (
     calculate_annualized_covariance_matrix,
     calculate_correlation_matrix,
@@ -746,3 +747,78 @@ def stress_liquidity_display(result):
         "Stressed Liquidation Days": [_amount(v) for v in rows["stressed_liquidation_days"]],
         "Status": [LIQUIDITY_STATUS_TEXT[s] for s in rows["liquidity_status"]],
     })
+
+
+BACKTEST_SAMPLE_CSV = PROJECT_ROOT / "tests" / "fixtures" / "synthetic_backtest_data.csv"
+PERCENT_METRICS = {"Cumulative Return", "Annualized Return (arithmetic)",
+                   "Annualized Return (geometric)", "Annualized Volatility", "Maximum Drawdown",
+                   "Historical VaR (1-day)", "Historical CVaR (1-day)"}
+
+
+def run_backtest(data, symbols, initial_capital, training_window, test_window,
+                 rebalance_frequency, risk_free_percent, confidence_percent, min_observations,
+                 periods_per_year, optimizer_settings, index_data=None, index_name=None):
+    """(BacktestResult, error message). Percent inputs are entered as 95.0 = 95%."""
+    s = optimizer_settings
+    try:
+        config = BacktestConfig(
+            symbols=tuple(symbols), initial_capital=float(initial_capital),
+            training_window=int(training_window), test_window=int(test_window),
+            rebalance_frequency=int(rebalance_frequency), periods_per_year=periods_per_year,
+            confidence_level=confidence_percent / 100, min_observations=int(min_observations),
+            risk_free_rate=risk_free_percent / 100, risk_aversion=float(s["risk_aversion"]),
+            cvar_weight=float(s["cvar_weight"]), return_weight=float(s["return_weight"]),
+            min_weight=s["min_percent"] / 100, max_weight=s["max_percent"] / 100,
+            liquidity_constraint_enabled=bool(s["liquidity_enabled"]),
+            max_position_to_adtv=(float(s["max_position_to_adtv"]) if s["liquidity_enabled"]
+                                  else None))
+        return run_walk_forward_backtest(data, config, index_data, index_name), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def backtest_comparison_display(result):
+    """A new, display-only Metric x strategy table (numbers only, no verdict)."""
+    def cell(metric, value):
+        if pd.isna(value):
+            return "n/a"
+        if metric in PERCENT_METRICS:
+            return format_percent(value)
+        if metric in ("Observations", "Rebalances"):
+            return str(int(value))
+        return f"{value:.3f}"
+
+    table = pd.DataFrame({"Metric": result.metrics.index})
+    for label in result.metrics.columns:
+        table[label] = [cell(m, v) for m, v in result.metrics[label].items()]
+    return table
+
+
+def _weights_text(weights):
+    return ", ".join(f"{s} {w:.1%}" for s, w in weights.items()) if weights else "none"
+
+
+def backtest_log_display(result):
+    """A new, display-only rebalance log (one row per window and strategy)."""
+    log = result.rebalance_log
+    return pd.DataFrame({
+        "Window": log["window"],
+        "Rebalance Date": log["rebalance_date"].dt.date.astype(str),
+        "Training": [f"{a.date()} to {b.date()}" for a, b in zip(log["training_start"],
+                                                              log["training_end"])],
+        "Test": [f"{a.date()} to {b.date()}" for a, b in zip(log["test_start"], log["test_end"])],
+        "Strategy": log["strategy"],
+        "Status": log["status"],
+        "Weights": [_weights_text(w) for w in log["weights"]],
+        "Training Obs": log["training_observations"],
+        "Solver": [s if isinstance(s, str) else "n/a" for s in log["solver_status"]],
+        "Note": log["reason"],
+    })
+
+
+def backtest_final_weights_display(result):
+    """Weights chosen at each strategy's latest rebalance (Symbol x strategy)."""
+    return pd.DataFrame({"Symbol": list(result.config.symbols),
+                         **{label: [format_percent(w.get(s)) if w else "n/a"
+                                    for s in result.config.symbols]
+                            for label, w in result.final_weights.items()}})

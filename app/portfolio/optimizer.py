@@ -180,7 +180,7 @@ class OptimizationResult:
 
 def equal_weight_portfolio(symbols):
     """{symbol: 1 / n} for the given symbols (validated, sorted)."""
-    symbols = _validate_symbols(symbols)
+    symbols = validate_symbols(symbols)
     return {s: 1 / len(symbols) for s in symbols}
 
 
@@ -211,7 +211,7 @@ def build_optimization_scenarios(data, symbols, min_observations=DEFAULT_MIN_OBS
     """Common-date return scenarios, expected daily returns and covariance for a universe."""
     require_canonical_columns(data, "portfolio optimization")
     validate_min_observations(min_observations)
-    symbols = _validate_symbols(symbols)
+    symbols = validate_symbols(symbols)
     missing = sorted(set(symbols) - set(data["symbol"].dropna()))
     if missing:
         raise ValueError(f"Selected symbol(s) not found in the market data: {', '.join(missing)}")
@@ -274,11 +274,11 @@ def optimize_portfolio(data, symbols,
     Returns an OptimizationResult. Raises ValueError for invalid inputs,
     InsufficientObservationsError, InfeasibleConstraintsError or OptimizationError.
     """
-    coefficients = _validate_objective_weights(risk_aversion, cvar_weight, return_weight)
+    coefficients = validate_objective_weights(risk_aversion, cvar_weight, return_weight)
     validate_confidence_level(confidence_level)
     validate_min_observations(min_observations)
     validate_periods_per_year(periods_per_year)
-    _validate_bounds(min_weight, max_weight)
+    validate_weight_bounds(min_weight, max_weight)
     if not isinstance(liquidity_constraint_enabled, bool):
         raise ValueError("liquidity_constraint_enabled must be True or False")
     if portfolio_value is not None:
@@ -290,7 +290,7 @@ def optimize_portfolio(data, symbols,
     elif max_position_to_adtv is not None:
         _validate_positive(max_position_to_adtv, "max_position_to_adtv")
 
-    symbols = _validate_symbols(symbols)
+    symbols = validate_symbols(symbols)
     n = len(symbols)
     stocks = "stock" if n == 1 else "stocks"
     if n * min_weight > 1 + 1e-12:
@@ -480,7 +480,7 @@ def _liquidity_table(weights, symbols, adtv, portfolio_value, caps, k, enabled):
     return pd.DataFrame(rows, columns=LIQUIDITY_COLUMNS)
 
 
-def _validate_symbols(symbols):
+def validate_symbols(symbols):
     if isinstance(symbols, str):
         raise ValueError("symbols must be a list of stock symbols, not a single string")
     try:
@@ -497,7 +497,7 @@ def _validate_symbols(symbols):
     return sorted(cleaned)
 
 
-def _validate_objective_weights(risk_aversion, cvar_weight, return_weight):
+def validate_objective_weights(risk_aversion, cvar_weight, return_weight):
     values = []
     for name, value in (("risk_aversion", risk_aversion), ("cvar_weight", cvar_weight),
                         ("return_weight", return_weight)):
@@ -511,7 +511,7 @@ def _validate_objective_weights(risk_aversion, cvar_weight, return_weight):
     return tuple(values)
 
 
-def _validate_bounds(min_weight, max_weight):
+def validate_weight_bounds(min_weight, max_weight):
     for name, value in (("min_weight", min_weight), ("max_weight", max_weight)):
         if (isinstance(value, bool) or not isinstance(value, (int, float, np.number))
                 or not math.isfinite(value) or not 0 <= value <= 1):

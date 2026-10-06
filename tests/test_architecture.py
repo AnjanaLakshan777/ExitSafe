@@ -6,8 +6,9 @@ Allowed dependency direction (left may never import right):
 
 Market data and financial analytics must stay usable without any
 intelligence, recommendation or scheduling code. Portfolio construction
-(app.portfolio), market-regime detection (app.regime) and stress testing
-(app.stress_testing) build on analytics, so data and analytics never import them.
+(app.portfolio), market-regime detection (app.regime), stress testing
+(app.stress_testing) and backtesting (app.backtesting) build on analytics, so
+data and analytics never import them.
 """
 
 import ast
@@ -20,9 +21,9 @@ APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 FORBIDDEN_IMPORTS = {
     "data": ["app.analytics", "app.portfolio", "app.regime", "app.stress_testing",
-             "app.intelligence", "app.recommendation", "app.scheduler"],
-    "analytics": ["app.portfolio", "app.regime", "app.stress_testing", "app.intelligence",
-                  "app.recommendation", "app.scheduler"],
+             "app.backtesting", "app.intelligence", "app.recommendation", "app.scheduler"],
+    "analytics": ["app.portfolio", "app.regime", "app.stress_testing", "app.backtesting",
+                  "app.intelligence", "app.recommendation", "app.scheduler"],
     "intelligence": ["app.recommendation", "app.scheduler"],
     "recommendation": ["app.scheduler"],
 }

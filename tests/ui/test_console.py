@@ -562,3 +562,46 @@ def test_stress_report_reports_errors():
     report, error = stress_report(data, [("ABC", 0.5), ("QQQ", 0.5)], 1e6, DEFAULT_SCENARIOS,
                                   None, 10.0, "zero", 95.0, 20)
     assert report is None and "not found" in error
+
+
+BACKTEST_SETTINGS = {"min_percent": 0.0, "max_percent": 40.0, "risk_aversion": 1.0,
+                     "cvar_weight": 1.0, "return_weight": 1.0, "liquidity_enabled": False,
+                     "max_position_to_adtv": None}
+
+
+def test_run_backtest_on_the_synthetic_fixture_with_the_sample_index():
+    from app.ui.console import (BACKTEST_SAMPLE_CSV, INDEX_SAMPLE_CSV,
+                                backtest_comparison_display, backtest_final_weights_display,
+                                backtest_log_display, load_index_data, run_backtest)
+
+    data = run_import(BACKTEST_SAMPLE_CSV.name, BACKTEST_SAMPLE_CSV.read_bytes()).import_result.data
+    index, _ = load_index_data(INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes())
+    result, error = run_backtest(data, ["ALPHA", "BRAVO", "CHARLIE", "DELTA"], 1_000_000, 60, 20,
+                                 20, 0.0, 95.0, 20, 252, BACKTEST_SETTINGS, index.data, "ASPI")
+    assert error is None and result.config.max_weight == pytest.approx(0.40)
+    table = backtest_comparison_display(result)
+    assert list(table.columns) == ["Metric", "ExitSafe", "EqualWeight", "MeanVariance",
+                                   "MarketIndex"]
+    rows = table.set_index("Metric")
+    assert rows.loc["Observations"].tolist() == ["260"] * 4
+    assert rows.loc["Rebalances", "MarketIndex"] == "n/a"
+    log = backtest_log_display(result)
+    assert len(log) == 13 * 3 and set(log["Status"]) == {"REBALANCED"}
+    assert log["Weights"].iloc[0].startswith("ALPHA 25.0%")
+    weights = backtest_final_weights_display(result)
+    assert list(weights.columns) == ["Symbol", "ExitSafe", "EqualWeight", "MeanVariance"]
+
+
+def test_run_backtest_reports_errors():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, run_backtest
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    result, error = run_backtest(data, ["ABC", "LMN", "XYZ"], 1_000_000, 60, 20, 20, 0.0, 95.0,
+                                 20, 252, BACKTEST_SETTINGS)
+    assert result is None and "Not enough history" in error and "the data has 25" in error
+    result, error = run_backtest(data, [], 1_000_000, 10, 5, 5, 0.0, 95.0, 20, 252,
+                                 BACKTEST_SETTINGS)
+    assert result is None and "at least one" in error
+    result, error = run_backtest(data, ["ABC"], 1_000_000, 10, 10, 5, 0.0, 95.0, 20, 252,
+                                 {**BACKTEST_SETTINGS, "max_percent": 100.0})
+    assert result is None and "overlap" in error

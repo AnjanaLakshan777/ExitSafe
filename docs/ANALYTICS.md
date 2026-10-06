@@ -18,7 +18,7 @@ and return new results at full precision. Rounding belongs to presentation.
 | 10 | Risk-aware portfolio optimization (`app/portfolio/optimizer.py`) | implemented |
 | 11 | Market regime, rule-based (`app/regime/regime_detector.py`) | implemented |
 | 12 | Stress testing, scenario-based (`app/stress_testing/stress_engine.py`) | implemented |
-| 13 | Backtesting | not implemented |
+| 13 | Walk-forward backtesting (`app/backtesting/backtest_engine.py`) | implemented |
 
 ## 1. Daily returns
 
@@ -1382,3 +1382,193 @@ For comparison, the historical 1-day VaR / CVaR (95%) are 2.54% / 2.83%.
     the historical-mean baseline.
 12. **Sector mapping needed:** sector results require a reliable sector
     mapping; none ships with the project.
+
+## 13. Walk-forward backtesting
+
+**Purpose.** Backtesting evaluates the allocation process on historical data by
+**repeatedly training on the past and testing on the next unseen period**.
+- **Evidence only:** it produces quantitative evidence, not BUY/SELL/SAFE
+  labels.
+- **No guarantee:** past performance does not guarantee future performance.
+- **Synthetic fixtures are not evidence:** results on the synthetic fixtures
+  say nothing about any real market.
+
+```python
+from app.backtesting.backtest_engine import BacktestConfig, run_walk_forward_backtest
+
+config = BacktestConfig(symbols=("ALPHA", "BRAVO", "CHARLIE", "DELTA"), max_weight=0.40)
+result = run_walk_forward_backtest(data, config, index_data=index, index_name="ASPI")
+result.metrics          # Metric x ExitSafe / EqualWeight / MeanVariance / MarketIndex
+result.equity_curve     # date + normalized values (1.0 at the comparison start)
+result.rebalance_log    # one row per window and strategy (audit trail)
+```
+
+**Configuration** (`BacktestConfig`; every assumption is explicit)
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `symbols` | (required) | the fixed universe, the same for every strategy |
+| `initial_capital` | 1,000,000 | capital at the comparison start (curves are also normalized to 1.0) |
+| `training_window` | 60 | price observations (dates) used for each decision, i.e. up to 59 daily returns |
+| `test_window` | 20 | out-of-sample dates after each rebalance |
+| `rebalance_frequency` | 20 | dates between rebalances; `test_window` must not exceed it |
+| `periods_per_year` | 252 | annualization |
+| `confidence_level` / `min_observations` | 0.95 / 20 | VaR/CVaR and the minimum training returns |
+| `risk_free_rate` | 0.0 | annual rate for Sharpe/Sortino, the same for every strategy (explicit, not a recommendation) |
+| `risk_aversion`, `cvar_weight`, `return_weight` | 1, 1, 1 | optimizer objective (section 10) |
+| `min_weight`, `max_weight` | 0, 1 | long-only bounds for both optimized strategies |
+| `liquidity_constraint_enabled`, `max_position_to_adtv` | off | ExitSafe's optional liquidity limit |
+
+**Timing convention**
+
+| Step | Rule |
+|---|---|
+| calendar | sorted dates on which any selected stock has a row |
+| training rows | the `training_window` dates calendar[k − 60 … k − 1], **strictly before** the rebalance date |
+| decision | after the **close of the last training day** D = calendar[k − 1] |
+| rebalance date T | calendar[k], the first test day. Positions are bought at D's close, so the first out-of-sample return is close(T) / close(D) − 1 |
+| test window | calendar[k … k + test_window − 1]. The next rebalance is `rebalance_frequency` dates later |
+| last window | only **complete** test windows are used |
+
+If `test_window` < `rebalance_frequency`, the dates in between are not
+invested and not evaluated.
+
+**Look-ahead prevention.** At every rebalance, only the training rows reach the
+strategy. These are the inputs:
+- expected returns, covariance and CVaR scenarios
+- ADTV for the liquidity limit
+- the minimum-history check
+
+The portfolio value used for the liquidity limit is the strategy's own value at
+D. Out-of-sample returns are realized returns of the test days.
+
+**The tests prove this:**
+- **Future returns:** a +25% return added to every day after a cut-off leaves
+  every earlier rebalance's weights identical. That includes the window whose
+  test period starts exactly at the cut-off.
+- **Future volume:** draining volume after the cut-off leaves the earlier
+  liquidity-constrained weights identical.
+- **The first test day:** changing the close of the first test day cannot change
+  that rebalance's weights.
+- **The decision day:** changing the close of the decision day D does change
+  them.
+
+**Strategies.** Every strategy uses the same universe, training windows,
+rebalance dates and test days (checked by a fairness test).
+
+| Strategy | Method |
+|---|---|
+| ExitSafe (`EXITSAFE_OPTIMIZED`) | `optimize_portfolio` on the training rows: risk_aversion × variance + cvar_weight × CVaR − return_weight × mean, min/max weight, optional liquidity limit |
+| MeanVariance (`MEAN_VARIANCE`) | the **same optimizer and inputs with cvar_weight = 0 and no liquidity limit**: risk_aversion × variance − return_weight × mean (a traditional mean-variance baseline; with return_weight = 1 it is "maximize mean − λ × variance") |
+| EqualWeight (`EQUAL_WEIGHT`) | 1/N of each selected stock, no optimization |
+| MarketIndex (`MARKET_INDEX`) | the supplied index's returns on the same test days. It has no weights, is only a benchmark and never influences stock weights. It is **UNAVAILABLE** when no index is supplied or it has no same-period returns on the test days |
+
+**Rebalancing and positions**
+- **At each rebalance:**
+  1. Train on the training rows only.
+  2. Set the new target weights.
+  3. Hold the positions **without trading** through the test window. The
+     weights drift with prices (buy-and-hold).
+- **Daily return:** the portfolio return is the value-weighted return of the
+  holdings, and value_t = value_(t−1) × (1 + return_t).
+- **Insufficient training data:** if a rebalance's training rows hold fewer than
+  `min_observations` common returns, it is **skipped for every strategy**, with
+  the reason.
+- **Strategy failure:** if a strategy's optimization fails (infeasible,
+  unbounded, solver error), it is recorded with the reason.
+- **Positions after a skip or failure:**
+  - positions are **kept** (CARRIED_FORWARD, no trade)
+  - a strategy that has no positions yet is NOT_INVESTED
+  - no weights are invented
+- **Comparison start:** the comparison starts at the first test window in which
+  every stock strategy holds a portfolio.
+
+**Missing data.** A test day is evaluated only if **every** selected stock (and
+the index, when one is supplied) has a usable return covering the **same
+period**, as in the section 3 alignment.
+- **Rows:** INVALID rows give no return and are never bridged; WARNING rows
+  count.
+- **Excluded days:** other days are **excluded, never zero-filled**, and counted
+  in `excluded_test_days`. A missing stock row removes that day and the next,
+  because the next return spans two days.
+- **Survivorship:** a stock that disappears from the data is not replaced by
+  another.
+
+**Rebalance log** (`rebalance_log`, one row per window and strategy)
+- **Fields:**
+  - `window`, `rebalance_date`
+  - `training_start` / `training_end`, `test_start` / `test_end`
+  - `strategy`, `status` (REBALANCED / CARRIED_FORWARD / NOT_INVESTED), `reason`
+  - `weights` (the new target, or the held drifted weights)
+  - `training_observations`, `solver_status`
+  - `evaluated_days`, `excluded_days`, `parameters`
+- **Example** (synthetic fixture, window 1, max weight 40%):
+
+| Strategy | Training | Test | Weights |
+|---|---|---|---|
+| ExitSafe | 2025-01-01 → 2025-03-25 (59 returns) | 2025-03-26 → 2025-04-22 | ALPHA 24.2%, BRAVO 40.0%, CHARLIE 33.4%, DELTA 2.4% (solver optimal) |
+| MeanVariance | same | same | ALPHA 20.0%, BRAVO 0.0%, CHARLIE 40.0%, DELTA 40.0% |
+
+**Metrics** (computed from the **out-of-sample** return series only; training
+statistics are never reported as performance)
+- **How they are computed:** each strategy's value path is measured with the
+  existing modules. Nothing is re-implemented.
+- **The metrics:**
+
+| Metric | Source |
+|---|---|
+| Cumulative return | final value / 1.0 − 1 |
+| Annualized return (arithmetic) | mean daily return × 252 |
+| Annualized return (geometric) | (1 + cumulative)^(252/n) − 1 (`app.analytics.ratios`) |
+| Annualized volatility | daily std × √252 |
+| Sharpe / Sortino | `app.analytics.ratios`, with the explicit risk-free rate |
+| Maximum drawdown | `app.analytics.drawdown`, on the value path from 1.0 |
+| Historical VaR / CVaR (1-day) | `app.analytics.var` / `app.analytics.cvar` |
+| Observations, rebalances | counts in the comparison period |
+
+- **Outputs:**
+  - `equity_curve` (date + one column per strategy, all 1.0 at the comparison
+    start)
+  - `drawdowns`
+  - `final_capital` (initial_capital × final value)
+  - `final_weights` (each strategy's latest rebalance)
+
+**Example** (synthetic fixture `tests/fixtures/synthetic_backtest_data.csv`,
+synthetic ASPI index, defaults with max weight 40%; 13 windows, 260 test days).
+These figures are **synthetic, not evidence**.
+
+| Metric | ExitSafe | EqualWeight | MeanVariance | MarketIndex |
+|---|---|---|---|---|
+| Cumulative return | −4.07% | −7.61% | 2.44% | −9.14% |
+| Annualized volatility | 11.92% | 13.76% | 13.77% | 12.98% |
+| Sharpe | −0.279 | −0.489 | 0.238 | −0.650 |
+| Maximum drawdown | −20.85% | −26.74% | −19.10% | −30.56% |
+| Historical CVaR (1-day) | 1.81% | 2.23% | 1.88% | 2.46% |
+
+**Synthetic test data.** `tests/fixtures/synthetic_backtest_data.csv` (generated
+by `scripts/generate_synthetic_backtest_data.py`, fixed seed) holds four
+invented stocks over 321 weekdays.
+- **Market factor:** each stock is driven by the synthetic "ASPI" index from
+  `data/sample/sample_index_data.csv`, with different betas, volatility,
+  correlation and liquidity.
+- **Liquidity differences:**
+  - one stock has no turnover column, so traded value is estimated
+  - one is illiquid, with zero-volume days
+- **Use:** it is for testing only.
+
+**Limitations:**
+1. **No trading costs:** no transaction costs, slippage, market impact, taxes
+   or brokerage fees. Each rebalance is assumed to trade at the close for free.
+2. **No intraday execution:** positions change only at daily closes.
+3. **Fixed universe:** the universe is fixed, because historical listing and
+   delisting data is unavailable.
+4. **Survivorship bias:** stocks that were delisted or renamed are absent from
+   the data.
+5. **Unadjusted prices:** splits, dividends and rights issues can distort
+   returns around those events. No adjustments are invented.
+6. **Short history:** public CSE history is short, and short training windows
+   make the optimization unstable.
+7. **Excluded days:** days without a common return are excluded, so moves on
+   those days are not counted.
+8. **No regime-aware optimization,** and no event/news signals.
+9. **No guarantee:** past performance does not guarantee future performance.

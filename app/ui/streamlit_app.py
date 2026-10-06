@@ -20,6 +20,7 @@ import streamlit as st  # noqa: E402
 from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
+    BACKTEST_SAMPLE_CSV,
     BASELINE_LABELS,
     DEFAULT_SCENARIOS,
     EXAMPLE_FILE_NAME,
@@ -32,6 +33,9 @@ from app.ui.console import (  # noqa: E402
     REGIME_UNDEFINED,
     UPLOAD_TYPES,
     alignment_summary,
+    backtest_comparison_display,
+    backtest_final_weights_display,
+    backtest_log_display,
     canonical_column_order,
     conditional_value_at_risk,
     custom_stress_scenario,
@@ -62,6 +66,7 @@ from app.ui.console import (  # noqa: E402
     regime_current_display,
     regime_history_display,
     risk_adjusted_ratios,
+    run_backtest,
     value_at_risk,
     var_display,
     run_import,
@@ -78,6 +83,7 @@ UPLOAD_OR_PASTE = "Upload or paste data"
 SAMPLE_ONE = f"Sample: one stock ({SAMPLE_SYMBOL})"
 SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
 INDEX_SAMPLE = "Sample: synthetic index series (ASPI, S&P SL20 names)"
+SAMPLE_BACKTEST = "Sample: synthetic backtest data (4 stocks, 321 days)"
 INDEX_UPLOAD = "Upload index CSV"
 
 
@@ -87,7 +93,8 @@ def main():
     st.caption("Manual verification of market-data import, volatility and "
                "covariance/correlation analysis")
 
-    source = st.radio("Data", [UPLOAD_OR_PASTE, SAMPLE_ONE, SAMPLE_THREE], horizontal=True)
+    source = st.radio("Data", [UPLOAD_OR_PASTE, SAMPLE_ONE, SAMPLE_THREE, SAMPLE_BACKTEST],
+                      horizontal=True)
     use_sample = source != UPLOAD_OR_PASTE
     uploaded = st.file_uploader("Upload CSV (comma, tab, semicolon or pipe separated)",
                                 type=UPLOAD_TYPES, disabled=use_sample)
@@ -101,6 +108,8 @@ def main():
     elif source == SAMPLE_THREE:
         name, content, symbol = (MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes(),
                                  None)
+    elif source == SAMPLE_BACKTEST:
+        name, content, symbol = BACKTEST_SAMPLE_CSV.name, BACKTEST_SAMPLE_CSV.read_bytes(), None
     elif uploaded is not None:
         name, content, symbol = uploaded.name, uploaded.getvalue(), None
     elif pasted_bytes(pasted):
@@ -142,9 +151,11 @@ def main():
     show_cvar(outcome, confidence, minimum)
     participation = show_liquidity(outcome)
     holdings, value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
-    show_optimization(outcome, confidence, minimum, periods, value, participation)
-    show_market_regime()
+    optimizer_settings = show_optimization(outcome, confidence, minimum, periods, value,
+                                           participation)
+    index_data, index_name = show_market_regime()
     show_stress_testing(outcome, holdings, value, confidence, minimum, participation)
+    show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name)
 
 
 def show_import(result):
@@ -518,6 +529,10 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
         st.caption(f"Each position is limited to {limit:g} × its average daily traded value: "
                    f"about {limit / (participation / 100):,.0f} trading days to exit at the "
                    f"{participation:g}% participation rate set in Liquidity Analysis.")
+    settings = {"min_percent": min_percent, "max_percent": max_percent,
+                "risk_aversion": risk_aversion, "cvar_weight": cvar_weight,
+                "return_weight": return_weight, "liquidity_enabled": enabled,
+                "max_position_to_adtv": limit}
     st.caption(f"Uses the inputs above: Portfolio Value Rs. {portfolio_value:,.2f}, "
                f"{confidence:g}% confidence, at least {minimum} common observations and "
                f"{periods} periods per year.")
@@ -527,7 +542,7 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
                              portfolio_value, enabled, limit)
     if error:
         st.error(error)
-        return
+        return settings
     if result.liquidity_unconstrained_symbols:
         st.warning("No liquidity data, so the liquidity constraint is not applied to: "
                    f"{', '.join(result.liquidity_unconstrained_symbols)}.")
@@ -562,6 +577,7 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
             "constraint, an error explains which constraint cannot be met.\n"
             "- There are no transaction costs, market impact or rebalancing in this model, and "
             "the allocation is a quantitative result, not a buy or sell recommendation.")
+    return settings
 
 
 def show_market_regime():
@@ -582,13 +598,13 @@ def show_market_regime():
                               KNOWN_INDEXES)
         if uploaded is None:
             st.info("Upload an index price file to see its market regime.")
-            return
+            return None, None
         file_name, content = uploaded.name, uploaded.getvalue()
 
     imported, error = load_index_data(file_name, content, chosen)
     if error:
         st.error(error)
-        return
+        return None, None
     if imported.invalid_rows:
         issues = ", ".join(f"{code} {count}" for code, count in imported.issue_counts.items())
         st.warning(f"{imported.invalid_rows} INVALID row(s) are excluded (never bridged): "
@@ -603,7 +619,7 @@ def show_market_regime():
     result, error = market_regime(imported.data, index_name)
     if error:
         st.error(error)
-        return
+        return imported.data, index_name
 
     if result.current.regime == REGIME_UNDEFINED:
         st.warning(f"Warm-up: {index_name} has {result.observations} usable observation(s); a "
@@ -641,6 +657,7 @@ def show_market_regime():
             "regime is shown rather than a false Normal.\n"
             "- The rules are checked in the order Stress, Recovery, High volatility, Normal. All "
             "thresholds are configurable model assumptions, not market rules.")
+    return imported.data, index_name
 
 
 def show_stress_testing(outcome, holdings, portfolio_value, confidence, minimum, participation):
@@ -733,6 +750,94 @@ def show_stress_testing(outcome, holdings, portfolio_value, confidence, minimum,
             "each holding's contribution is weight × stressed return.\n"
             "- Historical VaR/CVaR describe past daily returns; a scenario loss is a separate, "
             "hypothetical number. Neither is a buy or sell recommendation.")
+
+
+def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name):
+    data = outcome.import_result.data
+    st.divider()
+    st.subheader("Backtesting")
+    st.caption("Walk-forward: train on past data only, then test on the next unseen period. "
+               "ExitSafe and MeanVariance use the optimizer settings from Risk-Aware Portfolio "
+               "Optimization above.")
+    symbols = sorted(data["symbol"].dropna().unique())
+    left, right = st.columns(2)
+    capital = left.number_input("Initial Capital (Rs.)", value=1_000_000.0, step=100_000.0,
+                                min_value=1.0, format="%.2f")
+    risk_free = right.number_input("Risk-Free Rate (%) for the backtest", value=0.0, step=0.25,
+                                   min_value=-99.0, max_value=1000.0, format="%.2f")
+    first, second, third = st.columns(3)
+    training = first.number_input("Training Window", value=60, step=5, min_value=2)
+    test = second.number_input("Test Window", value=20, step=5, min_value=1)
+    rebalance = third.number_input("Rebalance Frequency", value=20, step=5, min_value=1)
+    confidence = st.number_input("Confidence Level (%) for the backtest", value=95.0, step=1.0,
+                                 min_value=0.01, max_value=99.99, format="%.2f")
+    selected = st.multiselect("Backtest stocks", symbols, default=symbols)
+    st.caption(f"At least {minimum} common training returns per rebalance (Minimum "
+               f"Observations above); {periods} periods per year. Market index: "
+               + (f"{index_name} (from Market Regime)." if index_name else "none loaded."))
+
+    key = (outcome.import_result.report.file_name, outcome.import_result.report.rows_read,
+           tuple(selected), capital, risk_free, training, test, rebalance, confidence, minimum,
+           periods, tuple(sorted(optimizer_settings.items())), index_name,
+           None if index_data is None else len(index_data))
+    if st.button("Run Backtest"):
+        with st.spinner("Running the walk-forward backtest..."):
+            result, error = run_backtest(data, selected, capital, training, test, rebalance,
+                                         risk_free, confidence, minimum, periods,
+                                         optimizer_settings, index_data, index_name)
+        st.session_state["backtest"] = (key, result, error)
+    stored = st.session_state.get("backtest")
+    if stored is None:
+        st.info("Choose the settings and click Run Backtest.")
+        return
+    if stored[0] != key:
+        st.info("Settings or data changed: click Run Backtest to update the results.")
+        return
+    _, result, error = stored
+    if error:
+        st.error(error)
+        return
+
+    st.caption(f"Out-of-sample comparison from {result.comparison_start.date()} (value 1.0) to "
+               f"{result.comparison_end.date()}: {result.observations} test days in "
+               f"{len(result.windows)} walk-forward windows; {result.excluded_test_days} test "
+               "day(s) excluded (no common return, never zero-filled).")
+    if result.market_index_status != "AVAILABLE":
+        st.info(f"Market index benchmark unavailable: {result.market_index_reason}")
+    for window, date, reason in result.skipped_rebalances:
+        st.warning(f"Rebalance {window} ({date.date()}) skipped: {reason}.")
+    carried = result.rebalance_log[result.rebalance_log["status"] != "REBALANCED"]
+    if len(carried):
+        st.warning(f"{len(carried)} strategy rebalance(s) did not produce new weights; see the "
+                   "Note column of the rebalance log.")
+
+    st.markdown("**Performance Comparison (out-of-sample only)**")
+    st.table(backtest_comparison_display(result).astype(str))
+    st.markdown("**Equity Curve** (normalized to 1.0)")
+    st.line_chart(result.equity_curve.set_index("date"))
+    st.markdown("**Rebalance Log**")
+    st.dataframe(backtest_log_display(result), hide_index=True)
+    st.markdown("**Latest Rebalance Weights**")
+    st.table(backtest_final_weights_display(result).astype(str))
+
+    with st.expander("How does the backtest work?"):
+        st.markdown(
+            "- **Backtesting evaluates a strategy on historical data by repeatedly training on "
+            "the past and testing on the next unseen period.**\n"
+            "- **Only information available at each decision date is used.** Weights are "
+            "chosen after the close of the last training day from that window's data alone, "
+            "and apply from the next trading day; positions are then held without trading "
+            "until the next rebalance.\n"
+            "- ExitSafe uses the full optimizer (variance, CVaR, expected return, limits); "
+            "MeanVariance uses the same inputs without CVaR or the liquidity limit; "
+            "EqualWeight holds 1/N of each stock; MarketIndex is the index itself.\n"
+            "- All metrics use only the out-of-sample test days. Days without a return for "
+            "every stock are excluded, not filled.\n"
+            "- There are no transaction costs, slippage, taxes or fees, and prices are not "
+            "adjusted for corporate actions. A fixed list of stocks can carry survivorship "
+            "bias.\n"
+            "- **Past performance does not guarantee future performance.** The comparison "
+            "shows numbers only; it does not say which strategy to use.")
 
 
 if __name__ == "__main__":

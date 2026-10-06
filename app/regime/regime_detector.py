@@ -308,7 +308,7 @@ def _decide(t, trend, volatility, ratio, recent_peak, drawdown, trend_ratio):
 def _indicators(data, index_name, volatility_window, baseline_window, trend_window,
                 drawdown_lookback):
     _validate_windows(volatility_window, baseline_window, trend_window, drawdown_lookback)
-    series, name = _index_series(data, index_name)
+    series, name = prepare_index_series(data, index_name)
     usable = series["validation_status"] != _INVALID
     excluded = int((~usable).sum())
 
@@ -335,7 +335,12 @@ def _indicators(data, index_name, volatility_window, baseline_window, trend_wind
     return out[INDICATOR_COLUMNS], name, excluded
 
 
-def _index_series(data, index_name):
+def prepare_index_series(data, index_name=None):
+    """One index as date, index_name, close, validation_status (sorted by date).
+
+    Unusable rows (no date, a non-positive or missing close) are marked INVALID;
+    duplicate usable dates raise ValueError; a missing index is an error.
+    """
     if not isinstance(data, pd.DataFrame):
         raise ValueError("Index data must be a DataFrame with date, index_name and close")
     missing = [c for c in ("date", "index_name", "close") if c not in data.columns]
