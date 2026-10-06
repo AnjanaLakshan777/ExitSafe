@@ -209,3 +209,27 @@ def test_drawdown_display_marks_unrecovered_and_undetermined():
     assert list(shown["Maximum Drawdown"]) == ["-25.00%", "0.00%", "n/a"]
     assert list(shown["Recovery Date"]) == ["not recovered", "n/a", "n/a"]
     assert list(shown["Peak Price"]) == ["120.00", "n/a", "n/a"]
+
+
+def test_risk_adjusted_ratios_take_percent_input():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, ratios_display, risk_adjusted_ratios
+
+    data = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    zero, error = risk_adjusted_ratios(data, 0.0, 252)
+    five, _ = risk_adjusted_ratios(data, 5.0, 252)
+
+    assert error is None and list(zero["symbol"]) == ["ABC", "LMN", "XYZ"]
+    assert (five["risk_free_rate"] == 0.05).all()
+    assert (five["annualized_excess_return"] < zero["annualized_excess_return"]).all()
+    shown = ratios_display(five)
+    assert list(shown.columns) == ["Symbol", "Observations", "Annualized Return",
+                                   "Annualized Volatility", "Annualized Excess Return",
+                                   "Sharpe Ratio", "Downside Deviation", "Sortino Ratio"]
+
+
+def test_invalid_ratio_inputs_return_a_message():
+    from app.ui.console import risk_adjusted_ratios
+
+    data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    ratios, error = risk_adjusted_ratios(data, -150.0, 252)
+    assert ratios is None and "risk_free_rate" in error

@@ -32,14 +32,12 @@ import numpy as np
 import pandas as pd
 
 from app.analytics.common import (
+    CONSTANT_RETURN_TOLERANCE,
     TRADING_DAYS_PER_YEAR,
     require_canonical_columns,
     validate_periods_per_year,
 )
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
-
-# Return series varying by less than this are treated as constant for correlation.
-CONSTANT_RETURN_TOLERANCE = 1e-12
 
 
 def calculate_return_matrix(data):

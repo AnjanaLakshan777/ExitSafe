@@ -34,6 +34,8 @@ from app.ui.console import (  # noqa: E402
     matrix_display,
     maximum_drawdown_display,
     pasted_bytes,
+    ratios_display,
+    risk_adjusted_ratios,
     run_import,
     status_level,
     volatility_display,
@@ -100,6 +102,7 @@ def main():
     show_volatility(outcome.volatility)
     show_covariance(outcome)
     show_drawdown(outcome)
+    show_ratios(outcome)
 
 
 def show_import(result):
@@ -229,6 +232,43 @@ def show_drawdown(outcome):
             "history, not a prediction.\n"
             "- INVALID rows are left out and no prices are filled in for missing days. n/a means "
             "fewer than 2 prices, or (for dates) that there was no decline at all.")
+
+
+def show_ratios(outcome):
+    st.divider()
+    st.subheader("Sharpe / Sortino")
+    left, right = st.columns(2)
+    rate_percent = left.number_input("Annual Risk-Free Rate (%)", value=0.0, step=0.25,
+                                     format="%.2f", min_value=-99.0, max_value=1000.0)
+    periods = right.number_input("Periods per year", value=TRADING_DAYS_PER_YEAR, step=1,
+                                 min_value=1)
+    st.caption("0.00% is only a calculation default; enter a rate that fits your analysis. "
+               "Periods per year here applies to this section only.")
+
+    ratios, error = risk_adjusted_ratios(outcome.import_result.data, rate_percent, periods)
+    if error:
+        st.error(error)
+        return
+    st.table(ratios_display(ratios).astype(str))
+
+    with st.expander("What do Sharpe and Sortino mean?"):
+        st.markdown(
+            "- **Sharpe ratio** shows return earned relative to **total** risk: "
+            "annualized excess return / annualized volatility.\n"
+            "- **Sortino ratio** shows return earned relative to **downside** risk: "
+            "annualized excess return / downside deviation.\n"
+            "- **Excess return** = daily return − daily risk-free rate, where the daily rate is "
+            "(1 + annual rate)^(1 / periods) − 1. Annualized excess return = its average × "
+            "periods per year.\n"
+            "- **Downside deviation** = √(average of min(excess return, 0)²) × √(periods per "
+            "year), averaged over all days (days above the risk-free rate count as 0).\n"
+            "- **Annualized Return** is the compounded (geometric) growth rate, shown for "
+            "information; the ratios use the arithmetic excess return. With few days of data "
+            "it is extrapolated a long way and can look extreme.\n"
+            "- Higher positive values generally indicate better risk-adjusted performance under "
+            "the chosen assumptions. They describe the past and are not a buy or sell signal.\n"
+            "- n/a means fewer than 2 returns, no variation (Sharpe), or no return below the "
+            "risk-free rate (Sortino).")
 
 
 if __name__ == "__main__":

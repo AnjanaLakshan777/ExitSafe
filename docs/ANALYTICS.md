@@ -10,7 +10,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 2 | Volatility (`app/analytics/volatility.py`) | implemented |
 | 3 | Covariance / correlation (`app/analytics/covariance.py`) | implemented |
 | 4 | Maximum drawdown (`app/analytics/drawdown.py`) | implemented |
-| 5–13 | Sharpe/Sortino, VaR, CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 5 | Sharpe / Sortino ratios (`app/analytics/ratios.py`) | implemented |
+| 6–13 | VaR, CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -247,3 +248,93 @@ maximum drawdown = min over t of drawdown(t)            ≤ 0
   - in unvalidated data, they raise `ValueError`
 - **Empty input** gives empty tables with the usual columns.
 - **Missing columns:** a missing `date`/`symbol`/`close` raises `ValueError`.
+
+## 5. Sharpe and Sortino ratios
+
+- **Sharpe ratio:** return earned relative to **total** risk.
+- **Sortino ratio:** return earned relative to **downside** risk.
+
+Higher positive values generally indicate better risk-adjusted performance
+**under the chosen assumptions**. They describe the past, depend heavily on the
+risk-free rate and the period covered, and are not buy or sell signals.
+
+```python
+from app.analytics.ratios import (
+    calculate_risk_adjusted_ratios,   # everything below, one row per symbol
+    calculate_sharpe_ratio,           # symbol, observations, risk_free_rate, excess return, volatility, sharpe
+    calculate_sortino_ratio,          # symbol, observations, risk_free_rate, excess return, downside dev., sortino
+    daily_risk_free_rate,
+)
+
+calculate_risk_adjusted_ratios(data, risk_free_rate=0.05, periods_per_year=252)
+```
+
+**Risk-free rate.** An explicit input: an annual rate as a decimal
+(`0.05` = 5%).
+- **The default `0.0` is only a calculation default.** Real analysis should
+  supply a rate that fits the investor and period, e.g. a relevant
+  government-securities yield; ExitSafe does not hard-code one.
+- **Negative and zero rates are allowed.** The rate must be finite and above
+  −100%.
+
+**Formulas** (P = periods per year, default 252; r = daily simple return from
+`calculate_daily_returns`)
+
+```
+daily risk-free rate      rf_d = (1 + rf)^(1/P) − 1          compounds back to rf over P periods
+daily excess return       e    = r − rf_d
+annualized excess return       = mean(e) × P                 arithmetic
+annualized volatility          = std(r, ddof=1) × √P         the existing volatility module
+Sharpe                         = annualized excess return / annualized volatility
+
+downside deviation             = √( mean( min(e, 0)² ) ) × √P
+Sortino                        = annualized excess return / downside deviation
+```
+
+**Downside-deviation convention (exact):**
+- **Target:** the daily risk-free rate.
+- **Which days count:** only days with a negative excess return count. They
+  are squared; every other day counts as **0**.
+- **The mean is over all n observations,** not just the negative ones.
+- **Annualization:** the square root of that mean is annualized with √P.
+- **Not the Sharpe denominator:** Sortino never reuses Sharpe's total
+  volatility.
+
+**Two different "annual returns":**
+- **`annualized_excess_return`** is **arithmetic** (mean × P). It is the
+  numerator of both ratios.
+- **`annualized_return`** is **geometric**: (∏(1 + r))^(P / n) − 1, the
+  compounded growth rate. It is shown for information only.
+- **With few observations it extrapolates a long way:** 5 days of returns
+  compounded to a year can show several hundred percent.
+
+**Undefined results are NaN, never 0 or infinity:**
+
+| Case | Result |
+|---|---|
+| fewer than 2 usable returns | every computed field is NaN |
+| no variation in returns (daily volatility ≤ 1e-12, which also catches floating-point noise) | Sharpe is NaN |
+| no excess return below the risk-free target (downside deviation ≤ 1e-12) | Sortino is NaN |
+
+**Data handling** is the same as returns and volatility:
+- INVALID rows produce no returns and are never bridged.
+- WARNING rows are used.
+- The first return of each symbol doesn't count.
+- Each symbol is independent.
+- The input is not modified.
+
+**Assumptions:**
+- Returns are independent from day to day, as in √P scaling.
+- Calendar gaps are not adjusted for.
+- Periods per year must be a positive finite number.
+
+**Worked example:** daily returns +2%, −1%, +3%, −2%, +1%, P = 252.
+
+| | rf = 0 | rf = 5% |
+|---|---|---|
+| daily risk-free rate | 0 | 1.05^(1/252) − 1 = 0.0001936305 |
+| annualized excess return | 0.006 × 252 = 1.512 | (0.006 − 0.0001936305) × 252 = 1.463205 |
+| annualized volatility | √(0.00172 / 4) × √252 = 0.329181 | 0.329181 (unchanged) |
+| Sharpe | 1.512 / 0.329181 = **4.5932** | **4.4450** |
+| downside deviation | √((0.01² + 0.02²) / 5) × √252 = 0.158745 | 0.160591 |
+| Sortino | 1.512 / 0.158745 = **9.5247** | **9.1114** |

@@ -20,6 +20,7 @@ from app.analytics.covariance import (
     describe_return_alignment,
 )
 from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
+from app.analytics.ratios import calculate_risk_adjusted_ratios
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
@@ -223,3 +224,29 @@ def maximum_drawdown_display(summary):
 def drawdown_chart_data(series):
     """Date x symbol table of drawdowns, for a line chart (reshaped, not recalculated)."""
     return series.pivot(index="date", columns="symbol", values="drawdown")
+
+
+def risk_adjusted_ratios(data, risk_free_rate_percent, periods_per_year):
+    """(ratios table, error message). The rate is entered in percent (5.0 = 5%)."""
+    try:
+        return calculate_risk_adjusted_ratios(data, risk_free_rate=risk_free_rate_percent / 100,
+                                              periods_per_year=periods_per_year), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def ratios_display(ratios):
+    """A new, display-only table: percentages for returns/risk, 3 decimals for ratios."""
+    def ratio(value):
+        return "n/a" if pd.isna(value) else f"{value:.3f}"
+
+    return pd.DataFrame({
+        "Symbol": ratios["symbol"],
+        "Observations": ratios["observations"],
+        "Annualized Return": [format_percent(v) for v in ratios["annualized_return"]],
+        "Annualized Volatility": [format_percent(v) for v in ratios["annualized_volatility"]],
+        "Annualized Excess Return": [format_percent(v) for v in ratios["annualized_excess_return"]],
+        "Sharpe Ratio": [ratio(v) for v in ratios["sharpe_ratio"]],
+        "Downside Deviation": [format_percent(v) for v in ratios["downside_deviation"]],
+        "Sortino Ratio": [ratio(v) for v in ratios["sortino_ratio"]],
+    })
