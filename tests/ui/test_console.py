@@ -283,3 +283,29 @@ def test_invalid_cvar_inputs_return_a_message():
     data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
     summary, error = conditional_value_at_risk(data, 95.0, 1)
     assert summary is None and "min_observations" in error
+
+
+def test_liquidity_tables_label_actual_and_estimated_sources():
+    from app.ui.console import (MULTI_SYMBOL_SAMPLE_CSV, liquidity_display, liquidity_summary,
+                                uses_estimated_traded_value)
+
+    three = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes()).import_result.data
+    one = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+
+    actual, estimated = liquidity_summary(three), liquidity_summary(one)
+    assert not uses_estimated_traded_value(actual) and uses_estimated_traded_value(estimated)
+    assert set(liquidity_display(actual)["Traded Value Source"]) == {"Actual turnover"}
+    assert list(liquidity_display(estimated)["Traded Value Source"]) == ["Estimated (close × volume)"]
+    assert list(liquidity_display(actual)["Zero Volume Days"]) == [0, 5, 0]
+
+
+def test_position_liquidity_takes_percent_and_reports_errors():
+    from app.ui.console import position_display, position_liquidity
+
+    data = run_import(SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL).import_result.data
+    positions, error = position_liquidity(data, 20_000_000, 10.0)
+    assert error is None and positions["participation_rate"].iloc[0] == pytest.approx(0.10)
+    assert list(position_display(positions).columns)[-1] == "Estimated Liquidation Days"
+
+    none, error = position_liquidity(data, 20_000_000, 150.0)
+    assert none is None and "participation_rate" in error

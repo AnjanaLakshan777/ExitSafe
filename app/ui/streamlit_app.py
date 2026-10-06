@@ -33,15 +33,20 @@ from app.ui.console import (  # noqa: E402
     drawdown_chart_data,
     format_percent,
     import_summary,
+    liquidity_display,
+    liquidity_summary,
     matrix_display,
     maximum_drawdown_display,
     pasted_bytes,
+    position_display,
+    position_liquidity,
     ratios_display,
     risk_adjusted_ratios,
     value_at_risk,
     var_display,
     run_import,
     status_level,
+    uses_estimated_traded_value,
     volatility_display,
 )
 
@@ -109,6 +114,7 @@ def main():
     show_ratios(outcome)
     confidence, minimum = show_var(outcome)
     show_cvar(outcome, confidence, minimum)
+    show_liquidity(outcome)
 
 
 def show_import(result):
@@ -345,6 +351,51 @@ def show_cvar(outcome, confidence, minimum):
             "- Both use exactly the same daily returns as VaR, are shown as positive losses, "
             "and are usually at least as large as VaR. They describe the past data or model, "
             "not a prediction.")
+
+
+def show_liquidity(outcome):
+    data = outcome.import_result.data
+    st.divider()
+    st.subheader("Liquidity Analysis")
+    summary = liquidity_summary(data)
+    st.table(liquidity_display(summary).astype(str))
+    if uses_estimated_traded_value(summary):
+        st.info("Where the source reports no turnover, daily traded value is **estimated** as "
+                "close × volume. That is an estimate, not official turnover.")
+
+    left, right = st.columns(2)
+    value = left.number_input("Position Value (Rs.)", value=20_000_000.0, step=1_000_000.0,
+                              min_value=1.0, format="%.2f")
+    rate = right.number_input("Participation Rate (%)", value=10.0, step=1.0, min_value=0.01,
+                              max_value=100.0, format="%.2f")
+    st.caption("Estimated liquidation time — based on assumed participation rate. The same "
+               "position value is assessed for each stock separately (not a portfolio).")
+    positions, error = position_liquidity(data, value, rate)
+    if error:
+        st.error(error)
+        return
+    st.table(position_display(positions).astype(str))
+
+    with st.expander("What do these liquidity measures mean?"):
+        st.markdown(
+            "- **Liquidity** describes how easily an investor can buy or sell a position without "
+            "needing an unusually large share of the market's normal trading activity.\n"
+            "- **Average Daily Volume**: average number of shares traded per day. **Average "
+            "Daily Traded Value (ADTV)**: typical daily monetary trading activity.\n"
+            "- **Traded Value Source**: *Actual turnover* when the data reports it for every "
+            "day; otherwise *Estimated (close × volume)* for every day — the two are never "
+            "mixed.\n"
+            "- **Zero Volume Days / Rate**: days with no shares traded. They are kept as real "
+            "observations (counting as 0), because they are evidence of illiquidity.\n"
+            "- **Position / ADTV** shows the size of the position compared with typical daily "
+            "trading activity.\n"
+            "- **Estimated Liquidation Days**: an approximate number of trading days needed if "
+            "the investor trades at the selected participation rate "
+            "(position ÷ (ADTV × participation rate)).\n"
+            "- The **10% participation rate is an assumption**, not a guaranteed execution "
+            "rule. This is a simplified estimate: there is no bid/ask spread, order-book "
+            "depth, market-impact or transaction-cost data yet. It is not a buy or sell "
+            "recommendation.")
 
 
 if __name__ == "__main__":

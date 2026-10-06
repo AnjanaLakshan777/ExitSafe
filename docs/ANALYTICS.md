@@ -13,7 +13,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 5 | Sharpe / Sortino ratios (`app/analytics/ratios.py`) | implemented |
 | 6 | Value at Risk, stock-level 1-day (`app/analytics/var.py`) | implemented |
 | 7 | CVaR / Expected Shortfall, stock-level 1-day (`app/analytics/cvar.py`) | implemented |
-| 8–13 | Liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 8 | Liquidity, stock-level (`app/analytics/liquidity.py`) | implemented |
+| 9–13 | Portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -557,3 +558,117 @@ parametric CVaR               = −ES_return = −(μ − σ × φ(z_α) / α)
 | z₀.₀₅, φ(z₀.₀₅) | −1.6448536, 0.1031356 |
 | **Parametric CVaR** | −(−0.0036667 − 0.0202677 × 0.1031356 / 0.05) = **4.5473%** |
 | Parametric VaR (for comparison) | **3.7004%** |
+
+## 8. Liquidity (stock-level)
+
+Liquidity describes **how easily an investor can buy or sell a position without
+needing an unusually large share of the market's normal trading activity**.
+This module exposes raw liquidity measures for the later Exit Safety Engine. It
+is not that engine, and it makes no buy or sell recommendation.
+
+```python
+from app.analytics.liquidity import calculate_liquidity_summary, calculate_position_liquidity
+
+calculate_liquidity_summary(data)                                   # one row per symbol
+calculate_position_liquidity(data, position_value=20_000_000, participation_rate=0.10)
+```
+
+**Inputs.**
+- **Required:** canonical `date`, `symbol`, `close`, `volume`.
+- **Optional:** `turnover`, `validation_status`.
+- **Nothing is invented,** filled in or interpolated.
+
+**Usable rows.**
+- **Excluded:**
+  - INVALID rows
+  - rows without a date or symbol
+  - rows without a finite positive close or a finite non-negative volume
+- **WARNING rows count.**
+- **Missing trading days don't appear,** and `observations` is the real number
+  of usable rows.
+- **Duplicate symbol/date rows:** in validated data all copies are INVALID; in
+  unvalidated data they raise `ValueError`.
+
+**Traded value: actual vs estimated, never mixed**
+
+| `traded_value_source` | Used when | Daily traded value |
+|---|---|---|
+| `ACTUAL_TURNOVER` | **every** usable row of the symbol reports a finite, non-negative `turnover` | reported turnover |
+| `ESTIMATED_TRADED_VALUE` | otherwise | **close × volume** for every usable row |
+
+- **The estimate is not official turnover.** `estimated_traded_value` ≠
+  turnover, and reported turnover is never overwritten.
+- **Partial turnover:** if only some days report turnover, the whole symbol
+  uses the estimate rather than mixing the two sources.
+  `actual_turnover_days` shows how many days had it.
+
+**Stock-level metrics** (`calculate_liquidity_summary`)
+
+| Metric | Formula |
+|---|---|
+| Average Daily Volume (ADV) | mean(volume) |
+| Median / min / max daily volume | of the usable rows |
+| Average Daily Traded Value (ADTV) | mean(daily traded value from the chosen source) |
+| Median daily traded value | median of the same |
+| `zero_volume_days` | number of usable rows with volume = 0 |
+| `zero_volume_rate` | zero_volume_days / observations |
+
+**Zero-volume days** are **valid observations**, not errors.
+- They count as 0 in ADV and ADTV.
+- They are counted in the zero-volume statistics, because days with no trades
+  are evidence of illiquidity.
+- They are never silently dropped. A row is excluded only if it fails the
+  usual validation rules.
+
+**Position liquidity** (`calculate_position_liquidity`; the same position value
+is assessed for each symbol separately, so this is not a portfolio):
+
+```
+position_to_adtv            = position_value / ADTV
+daily_executable_value      = ADTV × participation_rate
+estimated_liquidation_days  = position_value / daily_executable_value
+```
+
+- **`participation_rate`:** default **0.10**, must be above 0 and at most 1.
+  It is an **assumption** that the investor trades no more than that share of
+  typical daily traded value per day. It is not a market rule.
+- **`position_value`** must be a positive, finite amount.
+- **The result is an estimated liquidation time,** a simplified estimate and
+  not an execution guarantee.
+- **If ADTV is 0 or unavailable,** the ratio and the liquidation time are
+  **NaN**, never infinity.
+
+**No liquidity score or classification.** No weighted score or HIGH/LOW label
+is produced, because any thresholds would be arbitrary at this stage. The raw
+metrics are exposed instead.
+
+**Worked example** (stock ABC, no reported turnover):
+
+| Day | Close | Volume | Estimated traded value |
+|---|---|---|---|
+| 1 | 100 | 1,000,000 | 100,000,000 |
+| 2 | 102 | 1,200,000 | 122,400,000 |
+| 3 | 101 | 800,000 | 80,800,000 |
+
+| Result | Calculation | Value |
+|---|---|---|
+| ADV | 3,000,000 / 3 | **1,000,000** |
+| Estimated ADTV | 303,200,000 / 3 | **101,066,666.67** |
+| Position / ADTV (position Rs. 20,000,000) | 20,000,000 / 101,066,666.67 | **0.1979** |
+| Daily executable value (10%) | 101,066,666.67 × 0.10 | **10,106,666.67** |
+| Estimated liquidation days | 20,000,000 / 10,106,666.67 | **1.98** |
+
+**Limitations:**
+1. **Estimated money values:** without official turnover, monetary liquidity is
+   estimated from close × volume. That is not turnover, and the closing price
+   is not the average trade price.
+2. **No execution guarantee:** estimated liquidation time is not a promise of
+   how a sale would actually go.
+3. **Assumed participation:** the 10% participation rate is an assumption.
+4. **No bid/ask spread data** yet.
+5. **No order-book depth data** yet.
+6. **No market-impact model** yet: selling more than usual may move the price.
+7. **No transaction-cost or slippage model** yet.
+8. **No intraday liquidity data** yet: only daily totals.
+9. **Short history:** historical coverage may be short, and a few unusual days
+   can move the averages a lot.

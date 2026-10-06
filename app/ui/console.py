@@ -21,6 +21,12 @@ from app.analytics.covariance import (
 )
 from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
 from app.analytics.cvar import calculate_cvar_summary
+from app.analytics.liquidity import (
+    ACTUAL_TURNOVER,
+    ESTIMATED_TRADED_VALUE,
+    calculate_liquidity_summary,
+    calculate_position_liquidity,
+)
 from app.analytics.ratios import calculate_risk_adjusted_ratios
 from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
@@ -295,3 +301,59 @@ def cvar_display(summary):
         "Parametric VaR": [format_percent(v) for v in summary["parametric_var"]],
         "Parametric CVaR": [format_percent(v) for v in summary["parametric_cvar"]],
     })
+
+
+TRADED_VALUE_SOURCE_LABELS = {ACTUAL_TURNOVER: "Actual turnover",
+                              ESTIMATED_TRADED_VALUE: "Estimated (close × volume)"}
+
+
+def _amount(value, decimals=2):
+    return "n/a" if pd.isna(value) else f"{value:,.{decimals}f}"
+
+
+def liquidity_summary(data):
+    """Stock-level liquidity table from the analytics module (unformatted)."""
+    return calculate_liquidity_summary(data)
+
+
+def liquidity_display(summary):
+    """A new, display-only stock-level liquidity table."""
+    return pd.DataFrame({
+        "Symbol": summary["symbol"],
+        "Observations": summary["observations"],
+        "Average Daily Volume": [_amount(v, 0) for v in summary["average_daily_volume"]],
+        "Median Daily Volume": [_amount(v, 0) for v in summary["median_daily_volume"]],
+        "Average Daily Traded Value (Rs.)": [_amount(v) for v in summary["average_daily_traded_value"]],
+        "Traded Value Source": [TRADED_VALUE_SOURCE_LABELS.get(s, s)
+                                for s in summary["traded_value_source"]],
+        "Zero Volume Days": summary["zero_volume_days"],
+        "Zero Volume Rate": [format_percent(v) for v in summary["zero_volume_rate"]],
+    })
+
+
+def position_liquidity(data, position_value, participation_percent):
+    """(position liquidity table, error message). Participation is entered in percent."""
+    try:
+        return calculate_position_liquidity(data, float(position_value),
+                                             participation_percent / 100), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
+def position_display(positions):
+    """A new, display-only position-liquidity table."""
+    return pd.DataFrame({
+        "Symbol": positions["symbol"],
+        "Position Value (Rs.)": [_amount(v) for v in positions["position_value"]],
+        "Average Daily Traded Value (Rs.)": [_amount(v) for v in positions["average_daily_traded_value"]],
+        "Traded Value Source": [TRADED_VALUE_SOURCE_LABELS.get(s, s)
+                                for s in positions["traded_value_source"]],
+        "Position / ADTV": [_amount(v, 3) for v in positions["position_to_adtv"]],
+        "Daily Executable Value (Rs.)": [_amount(v) for v in positions["daily_executable_value"]],
+        "Estimated Liquidation Days": [_amount(v) for v in positions["estimated_liquidation_days"]],
+    })
+
+
+def uses_estimated_traded_value(summary):
+    """True if any symbol's traded value is estimated from close × volume."""
+    return bool((summary["traded_value_source"] == ESTIMATED_TRADED_VALUE).any())
