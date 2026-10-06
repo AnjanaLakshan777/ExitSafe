@@ -180,3 +180,32 @@ def test_matrix_display_formats_without_changing_values():
 
     pd.testing.assert_frame_equal(matrix, before)
     assert "0.00012346" in html and "n/a" in html and "1.00000000" in html
+
+
+def test_three_symbol_sample_produces_separate_drawdowns():
+    from app.ui.console import MULTI_SYMBOL_SAMPLE_CSV, drawdown_chart_data, maximum_drawdown_display
+
+    outcome = run_import(MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes())
+
+    assert list(outcome.maximum_drawdown["symbol"]) == ["ABC", "LMN", "XYZ"]
+    assert (outcome.maximum_drawdown["maximum_drawdown"] <= 0).all()
+    shown = maximum_drawdown_display(outcome.maximum_drawdown)
+    assert all(text.endswith("%") and text.startswith("-") for text in shown["Maximum Drawdown"])
+    assert list(drawdown_chart_data(outcome.drawdown_series).columns) == ["ABC", "LMN", "XYZ"]
+
+
+def test_drawdown_display_marks_unrecovered_and_undetermined():
+    from app.ui.console import maximum_drawdown_display
+
+    summary = pd.DataFrame({
+        "symbol": ["DOWN", "UP", "ONE"], "observations": [3, 3, 1],
+        "maximum_drawdown": [-0.25, 0.0, float("nan")],
+        "peak_date": pd.to_datetime(["2025-01-01", None, None]), "peak_price": [120.0, None, None],
+        "trough_date": pd.to_datetime(["2025-01-03", None, None]), "trough_price": [90.0, None, None],
+        "recovery_date": pd.to_datetime([None, None, None])})
+
+    shown = maximum_drawdown_display(summary)
+
+    assert list(shown["Maximum Drawdown"]) == ["-25.00%", "0.00%", "n/a"]
+    assert list(shown["Recovery Date"]) == ["not recovered", "n/a", "n/a"]
+    assert list(shown["Peak Price"]) == ["120.00", "n/a", "n/a"]

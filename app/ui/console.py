@@ -19,6 +19,7 @@ from app.analytics.covariance import (
     calculate_covariance_matrix,
     describe_return_alignment,
 )
+from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
@@ -61,6 +62,8 @@ class ConsoleOutcome:
     covariance: pd.DataFrame | None = None           # daily
     annualized_covariance: pd.DataFrame | None = None
     correlation: pd.DataFrame | None = None
+    drawdown_series: pd.DataFrame | None = None
+    maximum_drawdown: pd.DataFrame | None = None
     error: str | None = None              # short, user-facing
     error_detail: str | None = None       # technical detail, shown only on request
     needs_symbol: bool = False            # data has no Symbol column: ask the user for one
@@ -100,6 +103,8 @@ def run_import(file_name, content, symbol=None):
         covariance=calculate_covariance_matrix(result.data),
         annualized_covariance=calculate_annualized_covariance_matrix(result.data),
         correlation=calculate_correlation_matrix(result.data),
+        drawdown_series=calculate_drawdown_series(result.data),
+        maximum_drawdown=calculate_maximum_drawdown(result.data),
     )
 
 
@@ -191,3 +196,30 @@ def alignment_summary(info):
 def matrix_display(matrix, decimals):
     """Display-only formatting of a covariance/correlation matrix (values untouched)."""
     return matrix.style.format(f"{{:.{decimals}f}}", na_rep="n/a")
+
+
+def maximum_drawdown_display(summary):
+    """A new, display-only table of each symbol's maximum drawdown event."""
+    def day(value):
+        return "n/a" if pd.isna(value) else str(pd.Timestamp(value).date())
+
+    def price(value):
+        return "n/a" if pd.isna(value) else f"{value:,.2f}"
+
+    return pd.DataFrame({
+        "Symbol": summary["symbol"],
+        "Maximum Drawdown": [format_percent(v) for v in summary["maximum_drawdown"]],
+        "Peak Price": [price(v) for v in summary["peak_price"]],
+        "Peak Date": [day(v) for v in summary["peak_date"]],
+        "Trough Price": [price(v) for v in summary["trough_price"]],
+        "Trough Date": [day(v) for v in summary["trough_date"]],
+        "Recovery Date": [day(v) if not pd.isna(v) else
+                          ("not recovered" if not pd.isna(t) else "n/a")
+                          for v, t in zip(summary["recovery_date"], summary["trough_date"])],
+        "Prices used": summary["observations"],
+    })
+
+
+def drawdown_chart_data(series):
+    """Date x symbol table of drawdowns, for a line chart (reshaped, not recalculated)."""
+    return series.pivot(index="date", columns="symbol", values="drawdown")

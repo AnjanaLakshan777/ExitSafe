@@ -28,9 +28,11 @@ from app.ui.console import (  # noqa: E402
     UPLOAD_TYPES,
     alignment_summary,
     canonical_column_order,
+    drawdown_chart_data,
     format_percent,
     import_summary,
     matrix_display,
+    maximum_drawdown_display,
     pasted_bytes,
     run_import,
     status_level,
@@ -97,6 +99,7 @@ def main():
     show_returns(outcome.returns)
     show_volatility(outcome.volatility)
     show_covariance(outcome)
+    show_drawdown(outcome)
 
 
 def show_import(result):
@@ -198,6 +201,34 @@ def show_covariance(outcome):
             "- n/a means there was not enough data, or a stock's returns never changed.\n"
             "- Covariance will later be used to measure portfolio risk and to optimize "
             "portfolios.")
+
+
+def show_drawdown(outcome):
+    st.divider()
+    st.subheader("Maximum Drawdown")
+    st.table(maximum_drawdown_display(outcome.maximum_drawdown).astype(str))
+
+    series = outcome.drawdown_series
+    if not series.empty:
+        st.markdown("**Drawdown over time** (0% = at a running peak)")
+        st.line_chart(drawdown_chart_data(series))
+        st.markdown("**Drawdown series**")
+        st.dataframe(series, hide_index=True)
+
+    with st.expander("What is maximum drawdown?"):
+        st.markdown(
+            "- **Maximum Drawdown** shows the largest historical fall from a previous peak to a "
+            "later low.\n"
+            "- **Running peak** = the highest close so far; **drawdown** = close / running peak "
+            "− 1.\n"
+            "- Example: peak Rs. 120, trough Rs. 90 → drawdown = (90 / 120) − 1 = **−25%**.\n"
+            "- The peak always comes before the trough. **Recovery date** is the first later "
+            "day the close is back at or above the peak; *not recovered* means it has not "
+            "happened yet in this data.\n"
+            "- It helps measure how severe a past loss could have been during a decline. It is "
+            "history, not a prediction.\n"
+            "- INVALID rows are left out and no prices are filled in for missing days. n/a means "
+            "fewer than 2 prices, or (for dates) that there was no decline at all.")
 
 
 if __name__ == "__main__":

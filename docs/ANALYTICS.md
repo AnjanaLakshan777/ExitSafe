@@ -9,7 +9,8 @@ and return new results at full precision. Rounding belongs to presentation.
 | 1 | Returns (`app/analytics/returns.py`) | implemented |
 | 2 | Volatility (`app/analytics/volatility.py`) | implemented |
 | 3 | Covariance / correlation (`app/analytics/covariance.py`) | implemented |
-| 4–13 | Drawdown, Sharpe/Sortino, VaR, CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
+| 4 | Maximum drawdown (`app/analytics/drawdown.py`) | implemented |
+| 5–13 | Sharpe/Sortino, VaR, CVaR, liquidity, portfolio risk, optimization, regime, stress testing, backtesting | not implemented |
 
 ## 1. Daily returns
 
@@ -176,3 +177,73 @@ correlation (Pearson) Corr(X, Y) = Cov(X, Y) / (sd(X) × sd(Y))
 | Var(X) = Var(Y) | (0.0001 + 0 + 0.0001) / 2 | **0.0001** |
 | Corr(X, Y) | −0.00005 / √(0.0001 × 0.0001) | **−0.5** |
 | Annualized Cov(X, Y) | −0.00005 × 252 | **−0.0126** |
+
+## 4. Maximum drawdown
+
+**Maximum drawdown** shows the largest historical fall from a previous peak to
+a later low. ExitSafe uses it to measure how severe a past loss could have been
+during a decline. It describes history; it is not a prediction.
+
+```python
+from app.analytics.drawdown import calculate_drawdown_series, calculate_maximum_drawdown
+
+calculate_drawdown_series(data)    # date, symbol, close, running_peak, drawdown
+calculate_maximum_drawdown(data)   # one row per symbol: the worst event
+```
+
+**Formulas** (per symbol, in date order, from closing prices)
+
+```
+running_peak(t)  = max(close_1 ... close_t)
+drawdown(t)      = close_t / running_peak(t) − 1        0 at a peak, negative below it
+maximum drawdown = min over t of drawdown(t)            ≤ 0
+```
+
+- **Loss measure:** the result is ≤ 0. A worst fall of 25% is stored as
+  `-0.25`, never `+0.25`; the UI shows it as "-25.00%".
+
+**The maximum drawdown event** (`calculate_maximum_drawdown` columns)
+
+| Column | Meaning |
+|---|---|
+| `observations` | number of usable prices |
+| `maximum_drawdown` | the worst drawdown |
+| `trough_date`, `trough_price` | when the worst drawdown happened (the earliest one if tied) |
+| `peak_date`, `peak_price` | where that decline started: the **last** date at or before the trough on which the close equalled the running peak |
+| `recovery_date` | first date **after** the trough on which the close is back at or above the peak price; **empty (NaT) if it hasn't recovered** by the end of the data |
+
+- **Chronological order:** peak, trough and recovery always follow the actual
+  price path. The overall maximum and minimum prices are never paired
+  independently.
+- **Example:** in 100 → 80 → 150 the worst fall is 100 → 80 (−20%), not
+  150 → 80.
+
+**Worked example**
+
+| Close | 100 | 110 | 120 | 108 | 90 | 105 |
+|---|---|---|---|---|---|---|
+| Running peak | 100 | 110 | 120 | 120 | 120 | 120 |
+| Drawdown | 0% | 0% | 0% | −10% | **−25%** | −12.5% |
+
+- **Maximum drawdown** = (90 / 120) − 1 = **−25%**: peak 120, trough 90, not
+  recovered.
+- **With recovery:** 100 → 120 → 96 → 110 → 125 gives −20%, peak 120, trough
+  96, recovered on the day of 125.
+
+**Invalid data, missing dates and edge cases**
+
+- **INVALID rows** are left out, so they are never a peak or a trough. WARNING
+  rows are used. Rows without a date or symbol, or without a finite positive
+  close, are also left out.
+- **Nothing is filled in.** A missing day is not a drawdown event, and no price
+  is interpolated. Each drawdown compares a usable close with the highest
+  usable close before it.
+- **Fewer than 2 usable prices:** `maximum_drawdown` is **NaN**, not 0.
+- **No decline at all** (constant or always rising prices): `maximum_drawdown`
+  is 0 and the peak, trough and recovery fields are empty, because there is no
+  drawdown event.
+- **Duplicate symbol/date rows:**
+  - in validated data, all copies are INVALID and so left out
+  - in unvalidated data, they raise `ValueError`
+- **Empty input** gives empty tables with the usual columns.
+- **Missing columns:** a missing `date`/`symbol`/`close` raises `ValueError`.
