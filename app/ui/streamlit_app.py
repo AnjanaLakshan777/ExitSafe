@@ -15,6 +15,9 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
+from app.intelligence.dashboard import show_threat_panel, show_tracked_csv_panel  # noqa: E402
+from app.intelligence.settings import load_settings  # noqa: E402
+from app.ui.auth import require_login, show_account_panel  # noqa: E402
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
     BACKTEST_SAMPLE_CSV,
@@ -87,16 +90,22 @@ SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
 INDEX_SAMPLE = "Sample: synthetic index series (ASPI, S&P SL20 names)"
 SAMPLE_BACKTEST = "Sample: synthetic backtest data (4 stocks, 321 days)"
 INDEX_UPLOAD = "Upload index CSV"
+TRACKED_CSV = "Bot-tracked CSV (daily updates)"
 
 
 def main():
     st.set_page_config(page_title="ExitSafe - Analytics Test Console")
+    client = require_login()
+    if client is None:
+        return
+    show_account_panel(client)
     st.title("ExitSafe — Analytics Test Console")
     st.caption("Manual verification of market-data import, volatility and "
                "covariance/correlation analysis")
+    show_threat_panel()
 
-    source = st.radio("Data", [UPLOAD_OR_PASTE, SAMPLE_ONE, SAMPLE_THREE, SAMPLE_BACKTEST],
-                      horizontal=True)
+    source = st.radio("Data", [UPLOAD_OR_PASTE, TRACKED_CSV, SAMPLE_ONE, SAMPLE_THREE,
+                               SAMPLE_BACKTEST], horizontal=True)
     use_sample = source != UPLOAD_OR_PASTE
     uploaded = st.file_uploader("Upload CSV (comma, tab, semicolon or pipe separated)",
                                 type=UPLOAD_TYPES, disabled=use_sample)
@@ -105,7 +114,17 @@ def main():
     st.download_button("Download a synthetic example CSV", EXAMPLE_CSV,
                        file_name=EXAMPLE_FILE_NAME, mime="text/csv")
 
-    if source == SAMPLE_ONE:
+    show_tracked_csv_panel(uploaded.name if uploaded is not None else None,
+                           uploaded.getvalue() if uploaded is not None else None)
+
+    if source == TRACKED_CSV:
+        settings = load_settings()
+        if not settings.tracked_csv.exists():
+            st.info("No tracked CSV yet: upload one and click **Track ... for daily updates**.")
+            return
+        name, content, symbol = (settings.tracked_csv.name, settings.tracked_csv.read_bytes(),
+                                 settings.tracked_symbol)
+    elif source == SAMPLE_ONE:
         name, content, symbol = SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL
     elif source == SAMPLE_THREE:
         name, content, symbol = (MULTI_SYMBOL_SAMPLE_CSV.name, MULTI_SYMBOL_SAMPLE_CSV.read_bytes(),

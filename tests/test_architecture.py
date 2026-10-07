@@ -24,7 +24,7 @@ FORBIDDEN_IMPORTS = {
     "recommendation": ["app.scheduler"],
 }
 
-# Libraries that would mean live network collection has been implemented.
+# Network libraries. Live collection is allowed only inside intelligence/collectors.
 NETWORK_MODULES = ["requests", "httpx", "aiohttp", "urllib.request", "socket",
                    "selenium", "playwright", "bs4", "scrapy"]
 
@@ -52,8 +52,10 @@ def test_domain_boundaries(package):
     assert violations(package, FORBIDDEN_IMPORTS[package]) == []
 
 
-def test_no_network_collection_yet():
-    assert violations("intelligence", NETWORK_MODULES) == []
+def test_network_access_only_in_collectors():
+    found = [v for v in violations("intelligence", NETWORK_MODULES)
+             if Path(v.split(" imports ")[0]).parts[:2] != ("intelligence", "collectors")]
+    assert found == []
 
 
 @pytest.mark.parametrize("package", [

@@ -1,7 +1,7 @@
 """The canonical market-data columns every source is mapped onto. Missing values stay empty."""
 
 from dataclasses import dataclass
-from enum import StrEnum
+from app._compat import StrEnum
 
 import pandas as pd
 

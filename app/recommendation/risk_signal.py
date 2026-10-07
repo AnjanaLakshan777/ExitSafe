@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
+from app._compat import StrEnum
 
 from app.data.schemas.checks import validate_confidence
 from app.data.schemas.event_schema import ImpactDirection

@@ -5,7 +5,7 @@ file as a whole gets PASS, WARNING or FAIL.
 """
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from app._compat import StrEnum
 
 import numpy as np
 import pandas as pd

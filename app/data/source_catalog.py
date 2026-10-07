@@ -1,7 +1,7 @@
 """The external data sources ExitSafe uses or is looking into, and how far each can be trusted."""
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from app._compat import StrEnum
 
 
 class DataSourceType(StrEnum):
