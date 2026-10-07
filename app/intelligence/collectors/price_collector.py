@@ -119,7 +119,8 @@ def parse_gemini_quotes(data, symbols, today, cited_urls=()):
         try:
             day = date.fromisoformat(str(entry.get("date"))[:10])
             if (symbol not in wanted or day > today
-                    or (today - day).days > MAX_GEMINI_QUOTE_AGE_DAYS):
+                    or (today - day).days > MAX_GEMINI_QUOTE_AGE_DAYS
+                    or not _consistent_ohlcv(entry)):
                 continue
             quote = PriceQuote(
                 symbol=symbol, day=day, open=float(entry["open"]), high=float(entry["high"]),
@@ -132,6 +133,18 @@ def parse_gemini_quotes(data, symbols, today, cited_urls=()):
             continue      # a required value was missing or not a number
         quotes[symbol] = quote
     return quotes
+
+
+def _consistent_ohlcv(entry):
+    """Open and close inside the day's range and a whole share volume.
+
+    Stricter than PriceQuote, which also takes CSE quotes (an official CSE close can
+    sit outside the traded range); a model-reported price gets no such allowance.
+    """
+    low, high = float(entry["low"]), float(entry["high"])
+    volume = float(entry["volume"])
+    return (low <= float(entry["open"]) <= high and low <= float(entry["close"]) <= high
+            and volume.is_integer())
 
 
 def collect_gemini_quotes(symbols, settings, today=None):

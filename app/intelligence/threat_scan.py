@@ -65,6 +65,8 @@ def run_threat_scan(settings, *, store=None, collectors=None, send_email=send_al
             items.extend(collect(since, errors))
         except CollectionError as exc:
             errors.append(str(exc))
+        except Exception as exc:  # noqa: BLE001 - one broken source must not stop the scan
+            errors.append(f"{type(exc).__name__}: {exc}")
         result.errors.extend(f"{name}: {e}" for e in errors)
     if settings.use_web_search and not settings.gemini_configured:
         result.notes.append("Gemini web search skipped: GEMINI_API_KEY is not set")

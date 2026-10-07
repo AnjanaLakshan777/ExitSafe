@@ -69,10 +69,14 @@ def show_threat_panel():
     with st.expander(label, expanded=bool(serious)):
         if st.button("Scan now", key="threat_scan",
                      help="Read the news feeds (and Gemini web search, if a key is set) now"):
-            with st.spinner("Reading news sources..."):
-                result = run_threat_scan(settings, store=store)
-            st.success(f"{result.items_collected} stories read, "
-                       f"{len(result.new_threats)} new threat(s), {len(result.alerted)} emailed.")
+            try:
+                with st.spinner("Reading news sources..."):
+                    result = run_threat_scan(settings, store=store)
+                st.success(f"{result.items_collected} stories read, "
+                           f"{len(result.new_threats)} new threat(s), "
+                           f"{len(result.alerted)} emailed.")
+            except Exception as exc:  # noqa: BLE001 - show it instead of a traceback
+                st.error(f"The scan could not finish: {type(exc).__name__}: {exc}")
         _show_status(read_status())
 
         levels = [s.value for s in SEVERITY_ORDER]
@@ -87,7 +91,8 @@ def show_threat_panel():
                          column_config={"Link": st.column_config.LinkColumn("Link",
                                                                             display_text="open")})
         st.caption("Found by keyword matching on headlines. News and search results are "
-                   "unconfirmed claims; check the source before acting.")
+                   "unconfirmed claims; rows from Gemini web search are external, "
+                   "lower-credibility search results. Check the source before acting.")
 
 
 def show_tracked_csv_panel(upload_name=None, upload_content=None):
@@ -113,6 +118,9 @@ def show_tracked_csv_panel(upload_name=None, upload_content=None):
                     result = update_tracked_csv(settings)
                 except TrackedCsvError as exc:
                     st.error(str(exc))
+                    return
+                except Exception as exc:  # noqa: BLE001 - show it instead of a traceback
+                    st.error(f"The price update could not finish: {type(exc).__name__}: {exc}")
                     return
             st.success(f"{len(result.added)} row(s) added.")
             if result.added:

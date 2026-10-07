@@ -22,8 +22,10 @@ BOT_STATUS_FILE = INTELLIGENCE_PROCESSED_DIR / "bot_status.json"
 # processed/ because data/raw/ holds files exactly as obtained.
 DEFAULT_TRACKED_CSV = CSE_PROCESSED_DIR / "tracked_market_data.csv"
 
-# Free-tier Gemini model; change GEMINI_MODEL if Google retires it.
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+# Google's alias for the current stable Flash model, so the default doesn't go stale
+# (pinned versions get retired: gemini-2.5-flash now returns 404 for new API keys).
+# Set GEMINI_MODEL to pin a specific version instead.
+DEFAULT_GEMINI_MODEL = "gemini-flash-latest"
 PRICE_SOURCES = ("cse", "gemini")
 
 

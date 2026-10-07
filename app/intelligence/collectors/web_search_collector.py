@@ -27,11 +27,14 @@ date or URL. If nothing qualifies, reply with []."""
 
 
 def _published(value, now):
+    """Publish date as UTC midnight; None if missing, unreadable or in the future."""
     try:
         day = date.fromisoformat(str(value).strip()[:10])
     except ValueError:
         return None
-    return min(datetime.combine(day, time(), tzinfo=timezone.utc), now)
+    if day > now.date():
+        return None          # a story dated tomorrow can't have been found today
+    return datetime.combine(day, time(), tzinfo=timezone.utc)
 
 
 def collect_web_search(since, settings, now=None):
