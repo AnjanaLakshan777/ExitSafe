@@ -27,7 +27,7 @@ For example, an investor may hold Rs. 20 million across several stocks and later
 - What happens under a market or volatility shock?
 - Does the portfolio still look reasonable when tested on historical data?
 
-ExitSafe brings these questions together and turns the results into an investment-oriented decision.
+ExitSafe brings these questions together and lays out the evidence an investment decision can be based on and defended with.
 
 ---
 
@@ -157,6 +157,8 @@ A background bot watches world financial news for events that could hurt the mar
 - **Duplicate removal:** the same story syndicated by several outlets is stored once.
 - **Email alerts** over SMTP (for example Gmail with an app password) for new threats at or above `ALERT_MIN_SEVERITY`.
 - A **World Market Threats** panel on the dashboard lists threats from the last 24 hours and has a **Scan now** button.
+
+**How Gemini is used.** Gemini is optional. It adds extra threat stories to a scan, and it fills in daily prices for symbols the CSE snapshot doesn't list. Prices found this way are stored as secondary AI-sourced data (`gemini_web_search`) and are left out of the quantitative analysis unless the user chooses to include them. Gemini calls depend on the quota available to the API key. When Gemini is unavailable, scans and price updates carry on with the RSS/HTML feeds and CSE data, and the dashboard shows why Gemini was skipped. During final testing the project's key had reached its quota, so the Gemini paths were verified with simulated responses rather than a live answer.
 
 ### 13. Daily Price Updates
 
@@ -575,7 +577,9 @@ The market-threat bot. It collects news, classifies events, rates severity and s
 
 ### Recommendation Layer
 
-Combines event intelligence, market behaviour and portfolio exposure into risk signals with plain-language explanations. A risk signal never contains a predicted price.
+Planned, not yet implemented. Its intended role is to combine event intelligence, market behaviour and portfolio exposure into risk signals with plain-language explanations (and never a predicted price). For now the module only defines those data types and the explanation format, and the application does not call it.
+
+In the current version, the quantitative analysis produces the evidence, the Exit Safety Engine produces the exit-risk status, and external intelligence provides context. The final investment decision is interpreted from these outputs by the user.
 
 ### Scheduler
 
@@ -658,7 +662,7 @@ ExitSafe/
 │   │   └── threat_scan.py
 │   ├── portfolio/
 │   │   └── optimizer.py
-│   ├── recommendation/                # risk signals + explanations
+│   ├── recommendation/                # planned: risk signals + explanations
 │   ├── regime/
 │   │   └── regime_detector.py
 │   ├── scheduler/
@@ -734,7 +738,7 @@ A few important data rules:
 ## 1. Clone the project
 
 ```bash
-git clone <YOUR_REPOSITORY_URL>
+git clone https://github.com/AnjanaLakshan777/ExitSafe.git
 cd ExitSafe
 ```
 
@@ -825,7 +829,7 @@ Run the complete test suite with:
 python -m pytest
 ```
 
-The suite currently contains **1064 passing tests**. They cover the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, the Exit Safety Engine, the market-threat bot, the client database, login and registration, UI checks and module-boundary rules.
+The current suite has **1,115 tests passed**, with no failures. They cover the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, the Exit Safety Engine, the market-threat bot, the client database, login and registration, UI checks and module-boundary rules.
 
 The client-database and login tests use a temporary in-memory SQLite database, so they do not need PostgreSQL running.
 
@@ -905,6 +909,7 @@ Other limitations include the use of an assumed participation rate, possible est
 
 The supporting features have their own limits:
 
+- **Gemini:** live answers depend on the API key's quota; without it, the app runs on CSE and RSS/HTML data only.
 - **Threat bot:** classification is keyword-based, and news and web-search results are unverified claims. The company-disclosure, market-event and threat-intelligence collectors are not implemented yet.
 - **Client accounts:** a login lasts only for the browser session, so refreshing the page signs the client out. There is no password reset or email verification yet.
 - **Investments:** saved holdings are not yet fed into the portfolio analysis automatically.

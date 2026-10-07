@@ -1,4 +1,4 @@
-"""ExitSafe analytics test console, for manual checks (not the final dashboard).
+"""ExitSafe dashboard: market data, risk analysis, portfolio construction and exit safety.
 
 Run with: streamlit run app/ui/streamlit_app.py
 """
@@ -25,6 +25,8 @@ from app.ui.console import (  # noqa: E402
     DEFAULT_SCENARIOS,
     EXAMPLE_FILE_NAME,
     EXIT_STATUS_LABELS,
+    REGIME_LABELS,
+    TREND_LABELS,
     EXIT_STRESS_SCENARIOS,
     INDEX_SAMPLE_CSV,
     KNOWN_INDEXES,
@@ -91,22 +93,35 @@ SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
 INDEX_SAMPLE = "Sample: synthetic index series (ASPI, S&P SL20 names)"
 SAMPLE_BACKTEST = "Sample: synthetic backtest data (4 stocks, 321 days)"
 INDEX_UPLOAD = "Upload index CSV"
+# status -> (Streamlit box, icon, plain-language meaning)
+EXIT_STATUS_STYLE = {
+    "SAFE": (st.success, "✅", "every configured check passed."),
+    "CAUTION": (st.warning, "⚠️", "at least one check needs attention; see Why? below."),
+    "AT_RISK": (st.error, "⛔", "at least one check is beyond its at-risk threshold; see Why? "
+                "below."),
+    "INSUFFICIENT_DATA": (st.info, "ℹ️", "there isn't enough data for a reliable assessment; "
+                          "see Why? below."),
+}
 TRACKED_CSV = "Bot-tracked CSV (daily updates)"
 
 
 def main():
-    st.set_page_config(page_title="ExitSafe - Analytics Test Console")
+    st.set_page_config(page_title="ExitSafe — Liquidity-Aware Tail-Risk Portfolio Optimizer")
     client = require_login()
     if client is None:
         return
+    st.title("ExitSafe")
+    st.caption("Liquidity-Aware Tail-Risk Portfolio Optimizer")
     show_account_panel(client)
-    st.title("ExitSafe — Analytics Test Console")
-    st.caption("Manual verification of market-data import, volatility and "
-               "covariance/correlation analysis")
+
+    show_step("Market Intelligence", "Current world-market threats from news feeds (and Gemini "
+              "web search when available). Context only: it doesn't change any calculation.")
     show_threat_panel()
 
-    source = st.radio("Data", [UPLOAD_OR_PASTE, TRACKED_CSV, SAMPLE_ONE, SAMPLE_THREE,
-                               SAMPLE_BACKTEST], horizontal=True)
+    show_step("1 · Market Data", "Choose or upload price data. Every row is validated and keeps "
+              "its source.")
+    source = st.radio("Market data", [UPLOAD_OR_PASTE, TRACKED_CSV, SAMPLE_ONE, SAMPLE_THREE,
+                                      SAMPLE_BACKTEST], horizontal=True)
     use_sample = source != UPLOAD_OR_PASTE
     uploaded = st.file_uploader("Upload CSV (comma, tab, semicolon or pipe separated)",
                                 type=UPLOAD_TYPES, disabled=use_sample)
@@ -171,22 +186,49 @@ def main():
     show_import(outcome.import_result)
     if outcome.returns is None:
         return
+    show_step("2 · Risk & Return", "How each stock has moved: returns, volatility, co-movement, "
+              "drawdowns and risk-adjusted return.")
     show_returns(outcome.returns)
     show_volatility(outcome.volatility)
     show_covariance(outcome)
     show_drawdown(outcome)
     periods = show_ratios(outcome)
+    show_step("3 · Tail Risk & Liquidity", "How bad a bad day can be, and how easily each "
+              "position can be sold.")
     confidence, minimum = show_var(outcome)
     show_cvar(outcome, confidence, minimum)
     participation = show_liquidity(outcome)
+    show_step("4 · Portfolio Construction", "Your holdings as one portfolio, and a risk-aware "
+              "optimized allocation.")
     holdings, value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
     optimizer_settings = show_optimization(outcome, confidence, minimum, periods, value,
                                            participation)
+    show_step("5 · Market Context & Scenarios", "The current market regime and hypothetical "
+              "stress scenarios.")
     index_data, index_name = show_market_regime()
     show_stress_testing(outcome, holdings, value, confidence, minimum, participation)
+    show_step("6 · Historical Validation", "Walk-forward test of the allocation process on "
+              "unseen data.")
     show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name)
+    show_step("7 · Exit Decision", "Can the amount you need be withdrawn under current "
+              "conditions?")
     show_exit_safety(outcome, holdings, value, participation, confidence, minimum, periods,
                      index_data, index_name)
+
+
+def show_step(title, caption):
+    st.header(title)
+    st.caption(caption)
+
+
+def show_metrics(items):
+    """A row of labelled headline numbers, taken from results already calculated."""
+    for column, (label, value) in zip(st.columns(len(items)), items):
+        column.metric(label, value)
+
+
+def _days(value):
+    return "n/a" if pd.isna(value) else f"{value:,.1f} days"
 
 
 def show_ai_sourced_notice(selection):
@@ -457,6 +499,12 @@ def show_liquidity(outcome):
     if error:
         st.error(error)
         return rate
+    days = positions["estimated_liquidation_days"]
+    if days.notna().any():
+        slowest = positions.loc[days.idxmax()]
+        longest = _days(slowest["estimated_liquidation_days"])
+        show_metrics([("Liquidity bottleneck", slowest["symbol"]),
+                      ("Longest estimated liquidation", longest)])
     st.table(position_display(positions).astype(str))
 
     with st.expander("What do these liquidity measures mean?"):
@@ -514,6 +562,10 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
         st.warning("Insufficient historical observations for reliable portfolio VaR/CVaR — "
                    f"Observations: {result.observations}, Minimum required: {minimum}. "
                    "VaR: n/a, CVaR: n/a")
+    show_metrics([("Annualized volatility", format_percent(result.annualized_volatility)),
+                  ("Maximum drawdown", format_percent(result.maximum_drawdown)),
+                  ("Historical CVaR (1-day)", format_percent(result.historical_cvar)),
+                  ("Liquidity bottleneck", result.most_illiquid_symbol or "n/a")])
     st.table(portfolio_summary_display(result).astype(str))
 
     st.markdown("**Portfolio Holdings / Liquidity**")
@@ -589,6 +641,9 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
                    f"{', '.join(result.liquidity_unconstrained_symbols)}.")
 
     st.markdown("**Optimized Allocation**")
+    show_metrics([("Annualized volatility", format_percent(result.annualized_volatility)),
+                  ("Historical CVaR (1-day)", format_percent(result.historical_cvar)),
+                  ("Largest weight", format_percent(result.max_weight))])
     st.table(optimization_allocation_display(result).astype(str))
     st.table(optimization_metrics_display(result).astype(str))
 
@@ -629,7 +684,7 @@ def show_market_regime():
     source = st.radio("Index data", [INDEX_SAMPLE, INDEX_UPLOAD], horizontal=True)
     chosen = None
     if source == INDEX_SAMPLE:
-        st.info("Synthetic sample: invented values for testing the section. They are not real "
+        st.info("Synthetic sample index: invented values for demonstration. They are not real "
                 "ASPI or S&P SL20 index levels.")
         file_name, content = INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes()
     else:
@@ -668,6 +723,11 @@ def show_market_regime():
     else:
         st.caption(f"The first {result.warm_up_rows} observation(s) are warm-up (N/A); regimes "
                    f"start on {result.first_classified_date.date()}.")
+    current = result.current
+    show_metrics([("Current regime", REGIME_LABELS[current.regime]),
+                  ("Trend", TREND_LABELS[current.trend_state]),
+                  ("Drawdown from peak", format_percent(current.current_drawdown)),
+                  ("Rolling volatility (daily)", format_percent(current.rolling_volatility))])
     st.table(regime_current_display(result).astype(str))
     st.line_chart(result.history.set_index("date")["close"].rename(f"{index_name} close"))
 
@@ -932,14 +992,28 @@ def show_exit_safety(outcome, holdings, portfolio_value, participation, confiden
         st.error(error)
         return
     label = EXIT_STATUS_LABELS[result.overall_status]
-    show_status = {"SAFE": st.success, "CAUTION": st.warning, "AT_RISK": st.error,
-                   "INSUFFICIENT_DATA": st.info}[result.overall_status]
-    show_status(f"Decision-support assessment: **{label}**")
+    show_status, icon, meaning = EXIT_STATUS_STYLE[result.overall_status]
+    st.markdown(f"#### Can you exit Rs. {result.target_exit_value:,.0f} from this "
+                f"Rs. {result.portfolio_value:,.0f} portfolio?")
+    show_status(f"Decision-support assessment: **{label}** — {meaning}", icon=icon)
+
+    with_days = [h for h in result.holdings if h.liquidity_status == "OK"]
+    stressed = result.liquidity_stress_multiplier is not None
+    bottleneck = max(with_days, key=lambda h: h.stressed_exit_days if stressed
+                     else h.estimated_exit_days, default=None)
+    show_metrics([("Estimated exit horizon" + (" (stressed)" if stressed else ""),
+                   _days(result.assessed_exit_days)),
+                  ("Liquidity coverage", format_percent(result.coverage_ratio)),
+                  ("Liquidity bottleneck", bottleneck.symbol if bottleneck else "n/a")])
+    show_metrics([("Historical CVaR (1-day)", format_percent(result.historical_cvar)),
+                  (f"Hypothetical stress loss ({result.stress_scenario})",
+                   format_percent(result.stress_loss)),
+                  ("Market regime", REGIME_LABELS.get(result.market_regime, "Unavailable"))])
     st.table(exit_summary_display(result).astype(str))
 
     st.markdown("**Holding Exit Plan** (proportional exit, holdings sold in parallel)")
     st.table(exit_plan_display(result).astype(str))
-    st.markdown("**Why?**")
+    st.markdown("#### Why?")
     st.markdown("\n".join(f"- **{r.level.replace('_', ' ')}** ({r.factor.lower()}): {r.message}"
                           for r in result.reasons))
 
