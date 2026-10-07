@@ -17,6 +17,7 @@ import streamlit as st  # noqa: E402
 from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
 from app.intelligence.dashboard import show_threat_panel, show_tracked_csv_panel  # noqa: E402
 from app.intelligence.settings import load_settings  # noqa: E402
+from app.ui.auth import require_login, show_account_panel  # noqa: E402
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
     BACKTEST_SAMPLE_CSV,
@@ -94,6 +95,10 @@ TRACKED_CSV = "Bot-tracked CSV (daily updates)"
 
 def main():
     st.set_page_config(page_title="ExitSafe - Analytics Test Console")
+    client = require_login()
+    if client is None:
+        return
+    show_account_panel(client)
     st.title("ExitSafe — Analytics Test Console")
     st.caption("Manual verification of market-data import, volatility and "
                "covariance/correlation analysis")
