@@ -8,7 +8,7 @@ ExitSafe is a quantitative investment analysis application built around a simple
 
 Most portfolio analysis focuses on return and risk. ExitSafe goes a step further by also looking at **liquidity and the practical difficulty of getting money out of a portfolio**, especially when market conditions become difficult.
 
-The system combines market-data analysis, portfolio risk measurement, risk-aware optimization, stress testing, backtesting, market-regime analysis and an **Exit Safety Engine** into one workflow.
+The system combines market-data analysis, portfolio risk measurement, risk-aware optimization, stress testing, backtesting, market-regime analysis and an **Exit Safety Engine** into one workflow. Around that core, a **market-threat bot** watches world financial news and emails alerts, keeps a tracked price file up to date every trading day, and **client accounts** stored in PostgreSQL let each investor log in and record their own investments.
 
 The project is being developed with the Sri Lankan equity market in mind, while keeping the data and analytics layer flexible enough to work with compatible market-data sources.
 
@@ -146,9 +146,40 @@ The engine checks the requested exit against portfolio liquidity, portfolio CVaR
 
 It also explains **why** the result was reached instead of only showing a status label.
 
-### 12. Investment Dashboard
+### 12. Market-Threat Bot (AI Agent)
 
-The Streamlit dashboard brings the results together in one place, from market-data validation and individual stock analysis through portfolio construction, backtesting and the final Exit Safety Assessment.
+A background bot watches world financial news for events that could hurt the market, such as crashes, sanctions, defaults, wars or major cyber attacks.
+
+- **News collection** from RSS feeds (CNBC, MarketWatch, Financial Times, Investing.com, BBC, The Guardian, New York Times) and from listing pages such as LankaBusinessOnline and IMF News. A page is read only when its `robots.txt` allows it.
+- **Optional Gemini web search** (grounded in Google Search) finds extra threat stories. These start with the lowest credibility and are kept only when a publish date is given.
+- **Keyword classification** assigns each story an event type and a severity (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) and records the words that triggered it.
+- **Confidence by source:** a news report is treated as a claim, not a confirmed fact.
+- **Duplicate removal:** the same story syndicated by several outlets is stored once.
+- **Email alerts** over SMTP (for example Gmail with an app password) for new threats at or above `ALERT_MIN_SEVERITY`.
+- A **World Market Threats** panel on the dashboard lists threats from the last 24 hours and has a **Scan now** button.
+
+### 13. Daily Price Updates
+
+The bot can append each new trading day's prices to a tracked market-data CSV, so the analysis keeps running on current data.
+
+- Prices come from the official **Colombo Stock Exchange** data first. Gemini web search is used only as a labelled fallback for symbols the CSE does not list.
+- New rows are written in the file's own layout (columns, delimiter and date format).
+- Existing rows are never changed. A backup is taken before every write, and a date already in the file is skipped.
+- A stock that did not trade gets no row, instead of a stale price.
+- Choose the CSV to track from the dashboard (**Bot-tracked CSV** data source).
+
+### 14. Client Accounts & Investments
+
+Investors register and log in before using the dashboard. Accounts and investments are stored in PostgreSQL.
+
+- **Registration** with full name, email and password. It checks the email format, requires at least 8 characters, asks for the password twice and refuses an email that is already registered.
+- **Login** with email and password. Passwords are stored only as **salted scrypt hashes**, never as plain text.
+- **My Investments** lets a signed-in client add holdings (symbol, quantity, purchase price, purchase date) and shows their table and total amount invested.
+- A **Log out** button sits in the sidebar.
+
+### 15. Investment Dashboard
+
+The Streamlit dashboard brings the results together in one place, from login, threat alerts and market-data validation through individual stock analysis, portfolio construction, backtesting and the final Exit Safety Assessment.
 
 ---
 
@@ -499,13 +530,18 @@ ExitSafe uses a **modular monolith** architecture. It is one application, but it
                     └──────────┬───────────┘
                                ↓
                     ┌──────────────────────┐
-                    │  Streamlit Dashboard │
+                    │  Streamlit Dashboard │◄── Login / Register
+                    └──────────▲───────────┘    (PostgreSQL clients
+                               │                 and investments)
+                    ┌──────────┴───────────┐
+                    │ Market-Threat Bot    │◄── News feeds, Gemini search,
+                    │ (Intelligence layer) │    CSE daily prices
                     └──────────────────────┘
 ```
 
 ### Data Layer
 
-Handles loading, normalization, schemas, validation, provenance and source-related information.
+Handles loading, normalization, schemas, validation, provenance and source-related information. It also holds the client repository (`app/data/repositories/client_repository.py`), which stores client accounts and investments in PostgreSQL through SQLAlchemy.
 
 ### Analytics Layer
 
@@ -531,9 +567,23 @@ Runs walk-forward historical strategy tests and produces out-of-sample performan
 
 Combines liquidity, CVaR and stress information to produce the final Exit Safety assessment.
 
+### Intelligence Layer
+
+The market-threat bot. It collects news, classifies events, rates severity and source confidence, stores threats, sends email alerts and updates the tracked price CSV. Only `app/intelligence/collectors/` may access the network.
+
+### Recommendation Layer
+
+Combines event intelligence, market behaviour and portfolio exposure into risk signals with plain-language explanations. A risk signal never contains a predicted price.
+
+### Scheduler
+
+Defines the periodic jobs (collect intelligence, refresh market data, archive events).
+
 ### UI Layer
 
-The Streamlit interface provides the inputs, calculations, charts, tables and final investment-oriented results.
+The Streamlit interface provides login and registration, the client's investments, threat alerts, the inputs, calculations, charts, tables and final investment-oriented results.
+
+The module boundaries are enforced by `tests/test_architecture.py`: data → analytics → intelligence → recommendation → scheduler, and each module may only import from the modules to its left.
 
 ---
 
@@ -551,10 +601,13 @@ The Streamlit interface provides the inputs, calculations, charts, tables and fi
 | CLARABEL | Optimization solver |
 | Scikit-learn | Future statistical / ML modelling |
 | Plotly | Interactive charts |
+| PostgreSQL | Client accounts and investments |
+| SQLAlchemy + psycopg2 | Database access |
+| Google Gemini (`google-genai`) | Web search for threat news and fallback prices |
+| feedparser / BeautifulSoup | News feed and page collection |
+| python-dotenv | Settings from `.env` |
 | Pytest | Automated testing |
 | Git / GitHub | Version control |
-| PostgreSQL | Planned persistent storage |
-| SQLAlchemy | Planned database access |
 
 ---
 
@@ -583,17 +636,35 @@ ExitSafe/
 │   │   ├── cleaners/
 │   │   ├── loaders/
 │   │   ├── repositories/
+│   │   │   └── client_repository.py   # PostgreSQL clients + investments
 │   │   ├── schemas/
 │   │   └── validators/
 │   ├── exit_engine/
 │   │   └── exit_safety.py
+│   ├── intelligence/                  # market-threat bot
+│   │   ├── bot.py                     # bot entry point
+│   │   ├── collectors/                # news, Gemini search, CSE prices
+│   │   ├── classification/
+│   │   ├── impact/
+│   │   ├── parsers/
+│   │   ├── signals/
+│   │   ├── dashboard.py               # Streamlit threat + tracked-CSV panels
+│   │   ├── notifier.py                # email alerts
+│   │   ├── price_updater.py
+│   │   ├── settings.py
+│   │   ├── sources.py                 # news source list
+│   │   └── threat_scan.py
 │   ├── portfolio/
 │   │   └── optimizer.py
+│   ├── recommendation/                # risk signals + explanations
 │   ├── regime/
 │   │   └── regime_detector.py
+│   ├── scheduler/
+│   │   └── jobs.py
 │   ├── stress_testing/
 │   │   └── stress_engine.py
 │   └── ui/
+│       ├── auth.py                    # login, register, my investments
 │       ├── console.py
 │       └── streamlit_app.py
 │
@@ -601,16 +672,22 @@ ExitSafe/
 │   ├── raw/
 │   ├── processed/
 │   └── sample/
-├── database/
-├── notebooks/
 ├── scripts/
+│   └── init_client_db.py              # creates the client database + tables
 ├── docs/
 ├── tests/
 │   ├── analytics/
 │   ├── backtesting/
+│   ├── data/
 │   ├── exit_engine/
 │   ├── fixtures/
+│   ├── intelligence/
+│   ├── portfolio/
+│   ├── recommendation/
+│   ├── regime/
+│   ├── stress_testing/
 │   └── ui/
+├── .env.example
 ├── .gitignore
 ├── pytest.ini
 ├── requirements.txt
@@ -648,7 +725,9 @@ A few important data rules:
 - Python 3.12.x
 - `pip`
 - Git
+- PostgreSQL (for client accounts)
 - A modern web browser
+- Optional: a free Gemini API key and a Gmail app password, for the threat bot
 
 ## 1. Clone the project
 
@@ -680,7 +759,36 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## 4. Start the application
+## 4. Configure settings
+
+Copy `.env.example` to `.env` (git ignores it) and fill in your values:
+
+```text
+# Client database (PostgreSQL)
+DB_NAME=exitsafe
+DB_USER=postgres
+DB_PASSWORD=your-postgres-password
+DB_HOST=localhost
+DB_PORT=5432
+
+# Optional: threat bot
+GEMINI_API_KEY=
+SMTP_USER=
+SMTP_PASSWORD=
+ALERT_EMAIL_TO=
+```
+
+`.env.example` lists every option, including the alert severity, scan interval and price sources.
+
+## 5. Create the client database
+
+```bash
+python scripts/init_client_db.py
+```
+
+This creates the database if it does not exist, plus the `clients` and `investments` tables. It is safe to run again.
+
+## 6. Start the application
 
 ```bash
 streamlit run app/ui/streamlit_app.py
@@ -692,6 +800,19 @@ Then open the local Streamlit URL shown in the terminal, usually:
 http://localhost:8501
 ```
 
+Register an account on the **Register** tab, then use the dashboard.
+
+## 7. Run the market-threat bot (optional)
+
+```bash
+python -m app.intelligence.bot                         # run continuously
+python -m app.intelligence.bot --once                  # one news scan + one price update
+python -m app.intelligence.bot --news-only             # skip price updates
+python -m app.intelligence.bot --prices-only --once    # only update prices
+```
+
+The bot scans news every `BOT_INTERVAL_MINUTES` (default 30) and updates the tracked CSV once a day after the CSE close.
+
 ---
 
 # Running the Tests
@@ -702,7 +823,9 @@ Run the complete test suite with:
 python -m pytest
 ```
 
-At the current Exit Safety milestone, the suite contains **1027 passing tests** across the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, Exit Safety Engine and UI checks.
+The suite currently contains **1064 passing tests**. They cover the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, the Exit Safety Engine, the market-threat bot, the client database, login and registration, UI checks and module-boundary rules.
+
+The client-database and login tests use a temporary in-memory SQLite database, so they do not need PostgreSQL running.
 
 ---
 
@@ -778,6 +901,12 @@ The current version does not model:
 
 Other limitations include the use of an assumed participation rate, possible estimation of traded value from `close × volume`, potentially short or unadjusted historical price data depending on the source, and the lack of probability estimates for stress scenarios.
 
+The supporting features have their own limits:
+
+- **Threat bot:** classification is keyword-based, and news and web-search results are unverified claims. The company-disclosure, market-event and threat-intelligence collectors are not implemented yet.
+- **Client accounts:** a login lasts only for the browser session, so refreshing the page signs the client out. There is no password reset or email verification yet.
+- **Investments:** saved holdings are not yet fed into the portfolio analysis automatically.
+
 A `SAFE` result means the portfolio passed the configured model checks. It does **not** guarantee that the requested amount can be executed exactly as planned in the real market.
 
 ---
@@ -799,10 +928,14 @@ The core ExitSafe quantitative pipeline is implemented, including:
 - Stress testing
 - Walk-forward backtesting
 - Exit Safety Engine
+- Market-threat bot with news collection, Gemini web search and email alerts
+- Daily CSE price updates for a tracked CSV
+- Client registration and login with hashed passwords
+- Client investments stored in PostgreSQL
 - Streamlit dashboard
 - Automated testing
 
-Future work can extend the system with stronger market-impact modelling, transaction-cost and slippage models, optimized liquidation ordering, richer intraday liquidity analysis, advanced regime models, external market/event intelligence and persistent database-backed data management.
+Future work can extend the system with stronger market-impact modelling, transaction-cost and slippage models, optimized liquidation ordering, richer intraday liquidity analysis and advanced regime models. Other planned work: official disclosure and threat-intelligence collectors, persistent login sessions with password reset, and using each client's saved investments directly in the portfolio and Exit Safety analysis.
 
 ---
 
