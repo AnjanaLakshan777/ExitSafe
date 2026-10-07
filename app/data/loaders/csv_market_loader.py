@@ -21,6 +21,7 @@ from app.data.schemas.market_schema import (
     parse_numbers,
     to_canonical,
 )
+from app.data.source_catalog import find_source
 from app.data.validators.market_validator import ValidationResult, validate_market_data
 
 USER_CSV_SOURCE = "user_csv_upload"
@@ -38,6 +39,7 @@ COLUMN_ALIASES = {
     "change_pct": ["Change %", "change_pct", "Change"],
     "turnover": ["Turnover", "Turnover (Rs.)", "Value Traded"],
     "trades": ["Trades", "No. of Trades"],
+    "source": ["Source"],
 }
 
 # Fields whose values may be abbreviated with K / M / B suffixes.
@@ -212,6 +214,8 @@ def normalize_market_frame(raw, symbol=None, *, column_map=None, date_format=Non
                     "were rejected; pass date_format (e.g. '%d/%m/%Y') to resolve them.")
         elif canonical == "symbol":
             out["symbol"] = raw[primary]
+        elif canonical == "source":
+            _add_row_sources(raw[primary], out, result)
         elif canonical == "change_pct":
             if not _add_change_pct(raw, primary, out, result):
                 continue
@@ -229,6 +233,23 @@ def normalize_market_frame(raw, symbol=None, *, column_map=None, date_format=Non
         if mismatch.any():
             result.extra_warnings["CHANGE_PCT_MISMATCH"] = mismatch
     return result
+
+
+def _add_row_sources(values, out, result):
+    """Per-row source labels; only names registered in the source catalog are used."""
+    labels = values.astype("string").str.strip()
+    out["source"] = labels
+    present = ~is_missing(values)
+    sources = labels.map(lambda name: find_source(name) if isinstance(name, str) else None)
+    unknown = present & sources.isna()
+    if unknown.any():
+        result.extra_warnings["UNKNOWN_SOURCE_LABEL"] = unknown
+        result.notes.append(f"{int(unknown.sum())} row(s) name a source that isn't in the source "
+                            "catalog; they keep the file's own source.")
+    ai_rows = int(sum(1 for s in sources if s is not None and s.is_ai_generated))
+    if ai_rows:
+        result.notes.append(f"{ai_rows} row(s) are secondary AI-sourced prices (e.g. Gemini), "
+                            "not exchange data.")
 
 
 def _normalized_numbers(values, allow_suffix):

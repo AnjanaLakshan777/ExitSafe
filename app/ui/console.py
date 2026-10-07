@@ -2,7 +2,7 @@
 
 import math
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pandas as pd
@@ -37,6 +37,7 @@ from app.analytics.var import calculate_var_summary
 from app.analytics.returns import CANONICAL_DAILY_RETURN, calculate_daily_returns
 from app.analytics.volatility import calculate_annualized_volatility
 from app.config.paths import PROJECT_ROOT
+from app.data.analysis_selection import is_ai_sourced, select_analysis_data
 from app.data.loaders.index_series_loader import (
     IndexImportError,
     IndexNameRequiredError,
@@ -106,10 +107,15 @@ class ConsoleOutcome:
     error: str | None = None              # short, user-facing
     error_detail: str | None = None       # technical detail, shown only on request
     needs_symbol: bool = False            # data has no Symbol column: ask the user for one
+    selection: object | None = None       # AnalysisSelection: which rows reach the analytics
 
 
-def run_import(file_name, content, symbol=None):
-    """Import uploaded bytes with the real CSV importer and run the basic analytics."""
+def run_import(file_name, content, symbol=None, allow_ai_sourced=False):
+    """Import uploaded bytes with the real CSV importer and run the basic analytics.
+
+    AI-sourced rows (e.g. Gemini prices) are left out of the analytics unless
+    allow_ai_sourced is set; outcome.selection says what was left out.
+    """
     symbol = (symbol or "").strip() or None
     try:
         with tempfile.TemporaryDirectory() as folder:
@@ -129,8 +135,15 @@ def run_import(file_name, content, symbol=None):
         missing = ", ".join(result.validation.missing_columns)
         return ConsoleOutcome(import_result=result,
                               error=f"Required market-data columns are missing: {missing}.")
+    selection = select_analysis_data(result.data, allow_ai_sourced)
+    result = replace(result, data=selection.data)
+    if result.data.empty:
+        return ConsoleOutcome(import_result=result, selection=selection,
+                              error="Every row is a secondary AI-sourced price, so nothing is "
+                                    "left for analysis.")
     return ConsoleOutcome(
         import_result=result,
+        selection=selection,
         returns=calculate_daily_returns(result.data)[RETURN_COLUMNS],
         volatility=calculate_annualized_volatility(result.data),
         alignment=describe_return_alignment(result.data),
@@ -891,3 +904,17 @@ def exit_plan_display(result):
         table["Stressed Exit Days"] = [_amount(v) for v in plan["stressed_exit_days"]]
     table["Liquidity Status"] = plan["liquidity_status"]
     return table
+
+
+def ai_sourced_rows_display(selection):
+    """The AI-sourced rows of an import (left out, or included on request), for display."""
+    if selection.allow_ai_sourced:
+        rows = selection.data[is_ai_sourced(selection.data["source"])]
+    else:
+        rows = selection.excluded
+    return pd.DataFrame({
+        "Date": rows["date"].dt.date.astype(str),
+        "Symbol": rows["symbol"],
+        "Close": [_amount(v) for v in rows["close"]],
+        "Source": rows["source"],
+    })

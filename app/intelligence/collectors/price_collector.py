@@ -15,8 +15,9 @@ CSE_TRADE_SUMMARY_URL = "https://www.cse.lk/api/tradeSummary"
 CSE_MARKET_STATUS_URL = "https://www.cse.lk/api/marketStatus"
 COLOMBO = timezone(timedelta(hours=5, minutes=30))
 
-CSE_SOURCE = "CSE tradeSummary"
-GEMINI_SOURCE = "Gemini web search"
+# Source catalog names (app/data/source_catalog.py), written with every price row.
+CSE_SOURCE = "cse_trade_summary_current"
+GEMINI_SOURCE = "gemini_web_search"     # secondary AI-sourced data, not exchange data
 # Gemini quotes older than this are treated as stale and rejected.
 MAX_GEMINI_QUOTE_AGE_DAYS = 7
 

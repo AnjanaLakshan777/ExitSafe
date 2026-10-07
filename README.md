@@ -162,7 +162,9 @@ A background bot watches world financial news for events that could hurt the mar
 
 The bot can append each new trading day's prices to a tracked market-data CSV, so the analysis keeps running on current data.
 
-- Prices come from the official **Colombo Stock Exchange** data first. Gemini web search is used only as a labelled fallback for symbols the CSE does not list.
+- Prices come from the official **Colombo Stock Exchange** data first. Gemini web search is used only as a fallback for symbols the CSE does not list.
+- Every new row names its source in a **Source** column: `cse_trade_summary_current` (official CSE, primary) or `gemini_web_search` (secondary AI-sourced data, not exchange data). Older rows are left with an empty source rather than a guessed one.
+- **Gemini prices are left out of the quantitative analysis by default.** The dashboard lists them and only uses them if you tick *Include secondary AI-sourced prices*, with a warning. See `docs/DATA_SOURCES.md` (section 5).
 - New rows are written in the file's own layout (columns, delimiter and date format).
 - Existing rows are never changed. A backup is taken before every write, and a date already in the file is skipped.
 - A stock that did not trade gets no row, instead of a stale price.

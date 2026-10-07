@@ -5,6 +5,8 @@ from app._compat import StrEnum
 
 import pandas as pd
 
+from app.data.source_catalog import find_source
+
 
 class ValidationStatus(StrEnum):
     """Per-row validation outcome."""
@@ -117,6 +119,14 @@ def to_canonical(data, source, validation, date_format="ISO8601", source_timesta
     result["estimated_traded_value"] = (result["close"] * result["volume"]).where(derivable)
     result["source"] = source.source_name
     result["source_priority"] = source.source_priority
+    if "source" in data.columns:
+        # A row may name its own registered source (the price updater does this). Blank or
+        # unknown labels keep the file's source, so a source is never made up.
+        row_sources = [find_source(v.strip()) if isinstance(v, str) else None
+                       for v in data["source"]]
+        result["source"] = [s.source_name if s else source.source_name for s in row_sources]
+        result["source_priority"] = [s.source_priority if s else source.source_priority
+                                     for s in row_sources]
     if source_timestamp_column:
         result["source_timestamp"] = pd.to_datetime(data[source_timestamp_column],
                                                     errors="coerce", utc=True)

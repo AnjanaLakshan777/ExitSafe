@@ -34,6 +34,7 @@ from app.ui.console import (  # noqa: E402
     SAMPLE_SYMBOL,
     REGIME_UNDEFINED,
     UPLOAD_TYPES,
+    ai_sourced_rows_display,
     alignment_summary,
     backtest_comparison_display,
     backtest_final_weights_display,
@@ -152,6 +153,13 @@ def main():
         prompt.caption("This data has no Symbol column; using the symbol entered below.")
         outcome = run_import(name, content, symbol)
 
+    if outcome.selection is not None and outcome.selection.ai_sourced_rows:
+        if st.checkbox("Include secondary AI-sourced prices (Gemini) in the analysis",
+                       key="allow_ai_sourced",
+                       help="Not recommended: Gemini prices are not official exchange data."):
+            outcome = run_import(name, content, symbol, allow_ai_sourced=True)
+        show_ai_sourced_notice(outcome.selection)
+
     if outcome.error:
         st.error(outcome.error)
         if outcome.error_detail:
@@ -179,6 +187,16 @@ def main():
     show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name)
     show_exit_safety(outcome, holdings, value, participation, confidence, minimum, periods,
                      index_data, index_name)
+
+
+def show_ai_sourced_notice(selection):
+    count = selection.ai_sourced_rows
+    if selection.uses_ai_sourced:
+        st.warning(f"{selection.message} ({count} row(s))")
+    else:
+        st.info(f"{count} row(s) are secondary AI-sourced prices. {selection.message}")
+    with st.expander("Secondary AI-sourced rows"):
+        st.dataframe(ai_sourced_rows_display(selection), hide_index=True)
 
 
 def show_import(result):

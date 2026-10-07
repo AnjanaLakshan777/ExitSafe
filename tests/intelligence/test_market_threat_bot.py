@@ -13,6 +13,8 @@ from app.intelligence.collectors import news_collector
 from app.intelligence.collectors.gemini import extract_json
 from app.intelligence.collectors.http import CollectionError
 from app.intelligence.collectors.price_collector import (
+    CSE_SOURCE,
+    GEMINI_SOURCE,
     CseSnapshot,
     PriceQuote,
     parse_cse_trade_summary,
@@ -248,10 +250,10 @@ def test_parse_gemini_quotes_rejects_incomplete_future_and_stale():
         {**good, "symbol": "NVDA", "date": "2026-09-01"},           # stale
         {**good, "symbol": "NOTASKED"},
     ], ["AAPL", "MSFT", "TSLA", "NVDA"], today)
-    assert list(quotes) == ["AAPL"] and quotes["AAPL"].source == "Gemini web search"
+    assert list(quotes) == ["AAPL"] and quotes["AAPL"].source == GEMINI_SOURCE
 
 
-def quote(symbol, day=date(2026, 10, 6), source="CSE tradeSummary"):
+def quote(symbol, day=date(2026, 10, 6), source=CSE_SOURCE):
     return PriceQuote(symbol, day, 10.0, 11.0, 9.5, 10.4, 100, 1040.0, source)
 
 
@@ -271,7 +273,7 @@ def test_update_appends_rows_in_file_layout(tracked):
     asked = []
     def gemini(symbols, settings, today):
         asked.append(symbols)
-        return {"US1": quote("US1", source="Gemini web search")}
+        return {"US1": quote("US1", source=GEMINI_SOURCE)}
     settings = BotSettings(tracked_csv=tracked, gemini_api_key="k")
 
     result = price_updater.update_tracked_csv(settings, cse_snapshot=lambda: snapshot,
@@ -280,7 +282,10 @@ def test_update_appends_rows_in_file_layout(tracked):
     assert asked == [["US1"]]                         # Gemini only for the non-CSE symbol
     assert [q.symbol for q in result.added] == ["AAA.N0000", "US1"]
     lines = tracked.read_text(encoding="utf-8").splitlines()
-    assert lines[-2] == "2026-10-06,AAA.N0000,10,11,9.5,10.4,100,1040,"
+    # The file had no Source column, so one is added; the new rows name their source.
+    assert lines[0].endswith(",Notes,Source")
+    assert lines[-2] == "2026-10-06,AAA.N0000,10,11,9.5,10.4,100,1040,,cse_trade_summary_current"
+    assert lines[-1].endswith(",gemini_web_search")
     assert tracked.with_suffix(".csv.bak").exists()
 
     # Running again adds nothing: those dates are already in the file.
@@ -332,7 +337,7 @@ def test_semicolon_csv_keeps_its_delimiter(tmp_path, monkeypatch):
                                      cse_snapshot=lambda: snapshot, market_closed=lambda: True,
                                      now=NOW)
     assert path.read_text(encoding="utf-8").splitlines()[-1] == \
-        "2026-10-06;AAA.N0000;10;11;9.5;10.4;100"
+        "2026-10-06;AAA.N0000;10;11;9.5;10.4;100;cse_trade_summary_current"
 
 
 def test_quote_validation():

@@ -6,6 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from app.data.schemas.event_schema import Severity
+from app.data.source_catalog import DataSourceType, get_source
 from app.intelligence.classification.threat_keywords import SEVERITY_ORDER, severity_rank
 from app.intelligence.price_updater import TrackedCsvError, save_tracked_csv, update_tracked_csv
 from app.intelligence.settings import load_settings
@@ -15,6 +16,16 @@ from app.intelligence.threat_store import ThreatStore
 SEVERITY_ICONS = {Severity.CRITICAL: "🔴", Severity.HIGH: "🟠", Severity.MEDIUM: "🟡",
                   Severity.LOW: "⚪"}
 RECENT_HOURS = 24
+
+
+def source_label(source_name):
+    """Readable label for a price row's catalog source."""
+    source = get_source(source_name)
+    if source.is_ai_generated:
+        return f"Secondary AI-sourced ({source_name})"
+    if source.source_type is DataSourceType.OFFICIAL_CSE:
+        return f"Official CSE ({source_name})"
+    return source_name
 
 
 def threats_table(records):
@@ -85,7 +96,9 @@ def show_tracked_csv_panel(upload_name=None, upload_content=None):
     path = settings.tracked_csv
     with st.expander("📈 Daily price updates (tracked CSV)"):
         st.caption(f"The bot appends each trading day's prices to `{path}` — official CSE "
-                   "data first, Gemini web search only for symbols CSE doesn't list.")
+                   "data first, Gemini web search only for symbols CSE doesn't list. Gemini "
+                   "prices are secondary AI-sourced data: they're marked in the file's Source "
+                   "column and left out of quantitative analysis by default.")
         if upload_content is not None and st.button(f"Track `{upload_name}` for daily updates",
                                                     key="track_csv"):
             save_tracked_csv(upload_content, path)
@@ -104,8 +117,13 @@ def show_tracked_csv_panel(upload_name=None, upload_content=None):
             st.success(f"{len(result.added)} row(s) added.")
             if result.added:
                 st.dataframe(pd.DataFrame([{"Symbol": q.symbol, "Date": q.day, "Close": q.close,
-                                            "Volume": q.volume, "Source": q.source}
+                                            "Volume": q.volume, "Source": source_label(q.source)}
                                            for q in result.added]), hide_index=True)
+                ai_rows = sum(1 for q in result.added if get_source(q.source).is_ai_generated)
+                if ai_rows:
+                    st.warning(f"{ai_rows} row(s) came from Gemini web search. They are secondary "
+                               "AI-sourced prices, not exchange data, and are left out of "
+                               "quantitative analysis by default.")
             for symbol, reason in sorted(result.skipped.items()):
                 st.caption(f"{symbol}: {reason}")
             for error in result.errors:

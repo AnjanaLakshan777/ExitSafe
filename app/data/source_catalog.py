@@ -10,6 +10,7 @@ class DataSourceType(StrEnum):
     NEWS = "NEWS"
     REGULATOR = "REGULATOR"
     CYBERSECURITY = "CYBERSECURITY"
+    AI_GENERATED = "AI_GENERATED"            # values produced by an AI model, e.g. Gemini search
     OTHER = "OTHER"
 
 
@@ -18,6 +19,7 @@ class TrustLevel(StrEnum):
     MEDIUM = "MEDIUM"            # primary content, but interface or dating needs care
     LOW = "LOW"                  # secondary / unofficial; research and cross-checks only
     UNVERIFIED = "UNVERIFIED"    # not yet assessed
+    AI_GENERATED = "AI_GENERATED"  # found or reported by an AI model; never exchange data
     SYNTHETIC = "SYNTHETIC"      # generated test data, never real prices
 
 
@@ -27,6 +29,7 @@ SOURCE_PRIORITY = {
     TrustLevel.MEDIUM: 2,
     TrustLevel.LOW: 3,
     TrustLevel.UNVERIFIED: 4,
+    TrustLevel.AI_GENERATED: 5,
     TrustLevel.SYNTHETIC: 9,
 }
 
@@ -61,6 +64,11 @@ class DataSource:
     def source_priority(self):
         return SOURCE_PRIORITY[self.trust_level]
 
+    @property
+    def is_ai_generated(self):
+        """AI-sourced values are secondary: kept for reference, left out of analytics by default."""
+        return self.source_type is DataSourceType.AI_GENERATED
+
 
 SOURCE_CATALOG = (
     DataSource(
@@ -89,7 +97,7 @@ SOURCE_CATALOG = (
         expected_data_type="Snapshot of latest prices, volume and turnover per security",
         trust_level=TrustLevel.MEDIUM,
         license_or_usage_note="Subject to CSE terms of use. Interface is undocumented and may change.",
-        enabled=False,
+        enabled=True,
         historical_backfill_allowed=False,
         location="https://www.cse.lk/api/tradeSummary",
         notes=("Undocumented interface behind the CSE web pages. Reflects the CURRENT session "
@@ -97,7 +105,26 @@ SOURCE_CATALOG = (
                "be kept only if its payload carries its own trade date, and that date is what "
                "gets stored (validate with expected_date). Verified fields: symbol, open, high, "
                "low, price, closingPrice (0.0 during the session), sharevolume, turnover, "
-               "tradevolume, marketCap, lastTradedTime (epoch ms)."),
+               "tradevolume, marketCap, lastTradedTime (epoch ms). Used by the daily price "
+               "updater, which dates each row by its own lastTradedTime."),
+    ),
+    DataSource(
+        source_name="gemini_web_search",
+        source_type=DataSourceType.AI_GENERATED,
+        domain=None,
+        description=("Daily prices that Gemini found with Google Search, used by the price "
+                     "updater only for symbols the CSE snapshot doesn't list."),
+        historical_or_current=Coverage.CURRENT,
+        expected_data_type="Latest-session OHLCV per symbol, as reported by the model",
+        trust_level=TrustLevel.AI_GENERATED,
+        license_or_usage_note=("Model output, not a data licence: the cited pages' own terms "
+                               "apply. Not official exchange data."),
+        enabled=True,
+        historical_backfill_allowed=False,
+        notes=("Secondary and unverified. The updater only checks that values are positive, "
+               "high >= low and at most 7 days old; that does not make them exchange data. "
+               "Rows from this source are left out of quantitative analysis unless the user "
+               "explicitly includes them."),
     ),
     DataSource(
         source_name="cse_daily_report",
@@ -297,6 +324,11 @@ SOURCE_CATALOG = (
 )
 
 _BY_NAME = {source.source_name: source for source in SOURCE_CATALOG}
+
+
+def find_source(source_name):
+    """The catalog entry for source_name, or None if it isn't registered."""
+    return _BY_NAME.get(source_name)
 
 
 def get_source(source_name):

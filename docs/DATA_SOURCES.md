@@ -24,6 +24,7 @@ locally is a secondary research dataset (see
 | Regulators | `REGULATOR` | SEC Sri Lanka (`sec.gov.lk`), Central Bank of Sri Lanka (`cbsl.gov.lk`) | Not yet investigated |
 | Cybersecurity | `CYBERSECURITY` | Sri Lanka CERT public advisories (`cert.gov.lk`) | Not yet investigated |
 | News | `NEWS` | public financial news; specific outlets not yet selected | Not yet investigated |
+| AI-generated | `AI_GENERATED` | `gemini_web_search`: prices Gemini found with Google Search, used by the daily price updater only for symbols the CSE snapshot doesn't list | In use. Secondary and unverified; left out of quantitative analysis by default |
 | Other | `OTHER` | `exitsafe_sample` (synthetic test data) | In repo |
 
 Each catalog entry records: `source_name`, `source_type`, `domain`,
@@ -32,7 +33,7 @@ Each catalog entry records: `source_name`, `source_type`, `domain`,
 `location` and a `column_map` (source column to canonical column).
 
 Trust levels map to the canonical `source_priority` (lower = preferred):
-`HIGH` 1, `MEDIUM` 2, `LOW` 3, `UNVERIFIED` 4, `SYNTHETIC` 9.
+`HIGH` 1, `MEDIUM` 2, `LOW` 3, `UNVERIFIED` 4, `AI_GENERATED` 5, `SYNTHETIC` 9.
 
 A source is labelled `OFFICIAL_CSE` only if the Colombo Stock Exchange itself
 publishes it. A dataset that says it was *derived from* CSE data is secondary.
@@ -51,8 +52,8 @@ Defined in `app/data/schemas/market_schema.py`.
 | `turnover` | float64 | no | Value traded (LKR), **as reported** |
 | `estimated_traded_value` | float64 | no | **Derived:** `close × volume`, only for rows with no reported turnover. Never called turnover |
 | `trades` | float64 | no | Number of trades |
-| `source` | string | yes | Catalog `source_name` |
-| `source_priority` | int64 | yes | From the catalog trust level |
+| `source` | string | yes | Catalog `source_name`: the file's source, or the row's own source when a `Source` column names a registered one (see section 5) |
+| `source_priority` | int64 | yes | From the catalog trust level of that source |
 | `source_timestamp` | datetime64 (UTC) | no | Timestamp the source itself attaches to the record |
 | `validation_status` | string | yes | `VALID`, `WARNING` or `INVALID` |
 | `validation_warnings` | string | yes | `;`-separated issue codes |
@@ -296,6 +297,39 @@ Every imported file gets a `Provenance` record
 | `retrieval_time` | When the file was downloaded, if known (from `SOURCE.json`) |
 | `source_date` | As-of date **stated by the source**. Null for multi-date history files |
 | `source_url`, `source_version` | Where it came from, and its revision if known |
+
+### Per-row sources and AI-sourced prices
+
+A file can name a source for each row in a `Source` column. The daily price
+updater does this for every row it appends:
+
+| Value in `Source` | Catalog entry | Meaning |
+|---|---|---|
+| `cse_trade_summary_current` | `OFFICIAL_CSE`, priority 2 | Official CSE session data (primary) |
+| `gemini_web_search` | `AI_GENERATED`, priority 5 | Gemini + Google Search fallback (secondary, unverified) |
+| empty | the file's own source (`user_csv_upload` for uploads, priority 4) | Rows written before the column existed. No source is guessed for them |
+
+- If a tracked file has no `Source` column, the updater adds one the first time it
+  writes. Existing rows get an empty value and keep their other values unchanged.
+- A label that isn't in the catalog is ignored: the row keeps the file's source
+  and gets the warning `UNKNOWN_SOURCE_LABEL`.
+- Every appended row is also logged to
+  `data/processed/intelligence/price_updates.jsonl` with its symbol, date, close,
+  `source`, `source_priority`, `source_url`, the time it was written, and whether
+  it is used in quantitative analysis by default (`quantitative_analysis`).
+
+Gemini prices are **not equivalent to exchange data**. The updater checks that
+they are positive, that high ≥ low and that they are at most 7 days old, but
+that only removes obviously broken values; it does not verify them.
+
+**Analysis selection.** Before the dashboard runs any analytics, it passes the
+imported data through `select_analysis_data`
+(`app/data/analysis_selection.py`). Rows whose source is `AI_GENERATED` are left
+out by default; every other row is kept. No analytics formula knows about
+sources. The rows left out are listed in the dashboard. They can be included
+only by ticking **Include secondary AI-sourced prices (Gemini) in the
+analysis**, which shows a warning that the results are not based on CSE data
+alone.
 
 The audit script writes the provenance and the validation summary for each file
 to `data/processed/audit/<source>__<file>.manifest.json`. It also reports whether

@@ -1,9 +1,11 @@
 """Append each new trading day's prices to the user's tracked market-data CSV.
 
 Rows are written in the file's own layout (columns, delimiter, date format) so
-the dashboard importer reads them like the original rows. Existing rows are
-never changed: a backup is taken before every write, and a (symbol, date) that
-is already in the file is skipped. Where every row came from is logged to
+the dashboard importer reads them like the original rows. Each new row names its
+source in a Source column (added, empty for older rows, if the file has none),
+so CSE prices and secondary Gemini prices are never mixed up. Existing values are
+never changed: a backup is taken before every write, and a (symbol, date) that is
+already in the file is skipped. Every written row is also logged to
 ``price_updates.jsonl``.
 """
 
@@ -17,6 +19,7 @@ from datetime import datetime, timezone
 import pandas as pd
 
 from app.data.loaders.csv_market_loader import detect_columns
+from app.data.source_catalog import get_source
 from app.intelligence.collectors.http import CollectionError
 from app.intelligence.collectors.price_collector import (
     COLOMBO,
@@ -30,6 +33,7 @@ from app.intelligence.settings import PRICE_LOG_FILE
 DATE_FORMATS = ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
                 "%d.%m.%Y", "%d-%b-%Y", "%d %b %Y", "%b %d, %Y")
 DELIMITERS = ",;\t|"
+SOURCE_COLUMN = "Source"
 
 
 class TrackedCsvError(ValueError):
@@ -85,7 +89,7 @@ def _row(columns, column_for, quote, date_format):
     values = {"date": quote.day.strftime(date_format), "symbol": quote.symbol,
               "open": _number(quote.open), "high": _number(quote.high), "low": _number(quote.low),
               "close": _number(quote.close), "volume": _number(quote.volume),
-              "turnover": _number(quote.turnover)}
+              "turnover": _number(quote.turnover), "source": quote.source}
     row = dict.fromkeys(columns, "")
     for canonical, value in values.items():
         if canonical in column_for:
@@ -101,13 +105,37 @@ def save_tracked_csv(content, path):
     path.write_bytes(content)
 
 
+def _add_source_column(path, delimiter):
+    """Add an empty Source column to an older tracked file; existing values stay as they are."""
+    raw = path.read_bytes()
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    lines = raw.decode("utf-8-sig").splitlines(keepends=True)
+    out = []
+    for number, line in enumerate(lines):
+        body = line.rstrip("\r\n")
+        ending = line[len(body):]
+        if body.strip():
+            body += delimiter + (SOURCE_COLUMN if number == 0 else "")
+        out.append(body + ending)
+    path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + "".join(out).encode("utf-8"))
+
+
+def _analysis_use(source):
+    if source.is_ai_generated:
+        return "excluded by default: secondary AI-sourced data, not exchange data"
+    return "included"
+
+
 def _log(quotes, now):
     PRICE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with PRICE_LOG_FILE.open("a", encoding="utf-8") as log:
         for q in quotes:
+            source = get_source(q.source)
             log.write(json.dumps({"written_time": now.isoformat(), "symbol": q.symbol,
                                   "date": q.day.isoformat(), "close": q.close,
-                                  "source": q.source, "source_url": q.source_url}) + "\n")
+                                  "source": q.source, "source_priority": source.source_priority,
+                                  "source_url": q.source_url,
+                                  "quantitative_analysis": _analysis_use(source)}) + "\n")
 
 
 def update_tracked_csv(settings, *, cse_snapshot=collect_cse_quotes,
@@ -179,13 +207,18 @@ def update_tracked_csv(settings, *, cse_snapshot=collect_cse_quotes,
         return result
 
     shutil.copy2(path, path.with_suffix(path.suffix + ".bak"))
+    columns = list(frame.columns)
+    if "source" not in column_for:
+        _add_source_column(path, delimiter)
+        columns.append(SOURCE_COLUMN)
+        column_for["source"] = SOURCE_COLUMN
     raw = path.read_bytes()
     with path.open("a", encoding="utf-8", newline="") as handle:
         if raw and not raw.endswith((b"\n", b"\r")):
             handle.write("\n")
         writer = csv.writer(handle, delimiter=delimiter, lineterminator="\n")
         for quote in new_quotes:
-            writer.writerow(_row(list(frame.columns), column_for, quote, date_format))
+            writer.writerow(_row(columns, column_for, quote, date_format))
     _log(new_quotes, now)
     result.added = new_quotes
     return result
