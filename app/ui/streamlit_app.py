@@ -15,9 +15,13 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from app.analytics.volatility import TRADING_DAYS_PER_YEAR  # noqa: E402
-from app.intelligence.dashboard import show_threat_panel, show_tracked_csv_panel  # noqa: E402
-from app.intelligence.settings import load_settings  # noqa: E402
+from app.intelligence.dashboard import show_threat_panel  # noqa: E402
+from app.intelligence.market_tracking import START_INVESTING  # noqa: E402
 from app.ui.auth import require_login, show_account_panel  # noqa: E402
+from app.ui.journeys import (choose_mode, saved_investments, show_already_invested,  # noqa: E402
+                             show_start_investing)
+from app.ui.tracking_panel import (has_tracked_data, show_start_tracking,  # noqa: E402
+                                   show_tracked_data)
 from app.ui.console import (  # noqa: E402
     EXAMPLE_CSV,
     BACKTEST_SAMPLE_CSV,
@@ -93,6 +97,7 @@ SAMPLE_THREE = "Sample: three stocks (ABC, LMN, XYZ)"
 INDEX_SAMPLE = "Sample: synthetic index series (ASPI, S&P SL20 names)"
 SAMPLE_BACKTEST = "Sample: synthetic backtest data (4 stocks, 321 days)"
 INDEX_UPLOAD = "Upload index CSV"
+INDEX_NONE = "No market index"
 # status -> (Streamlit box, icon, plain-language meaning)
 EXIT_STATUS_STYLE = {
     "SAFE": (st.success, "✅", "every configured check passed."),
@@ -102,7 +107,7 @@ EXIT_STATUS_STYLE = {
     "INSUFFICIENT_DATA": (st.info, "ℹ️", "there isn't enough data for a reliable assessment; "
                           "see Why? below."),
 }
-TRACKED_CSV = "Bot-tracked CSV (daily updates)"
+TRACKED_DATA = "My tracked market data"
 
 
 def main():
@@ -113,15 +118,43 @@ def main():
     st.title("ExitSafe")
     st.caption("Liquidity-Aware Tail-Risk Portfolio Optimizer")
     show_account_panel(client)
+    mode = choose_mode()
+    if mode is None:
+        return
 
-    show_step("Market Intelligence", "Current world-market threats from news feeds (and Gemini "
-              "web search when available). Context only: it doesn't change any calculation.")
+    market = show_market_data(client, mode)
+    if market is None:
+        return
+    outcome, tracked, name, symbol, allow_ai = market
+    index_data, index_name, index_note = choose_market_index()
+    if mode == START_INVESTING:
+        defaults = show_start_investing(outcome, index_data, index_name)
+    else:
+        defaults = show_already_invested(outcome, index_data, index_name,
+                                         saved_investments(client))
+
+    show_step("External market intelligence", "Recent world-market threats may need extra "
+              "attention. They are context only: news and AI search results never change the "
+              "recommendation, the portfolio weights or the Exit Safety status.")
     show_threat_panel()
 
-    show_step("1 · Market Data", "Choose or upload price data. Every row is validated and keeps "
-              "its source.")
-    source = st.radio("Market data", [UPLOAD_OR_PASTE, TRACKED_CSV, SAMPLE_ONE, SAMPLE_THREE,
-                                      SAMPLE_BACKTEST], horizontal=True)
+    st.divider()
+    if st.toggle("See Calculations", key="see_calculations",
+                 help="The full quantitative analysis behind the recommendation."):
+        show_calculations(outcome, tracked, name, symbol, allow_ai, defaults, index_data,
+                          index_name, index_note)
+
+
+def show_market_data(client, mode):
+    """Tracked, uploaded, pasted or sample prices, imported and checked.
+
+    Returns (outcome, tracked input, file name, symbol, AI rows allowed), or None.
+    """
+    show_step("Your market data", "Price history for the companies you're considering."
+              if mode == START_INVESTING else "Price history for the companies you hold.")
+    sources = [UPLOAD_OR_PASTE, TRACKED_DATA, SAMPLE_ONE, SAMPLE_THREE, SAMPLE_BACKTEST]
+    source = st.radio("Market data", sources, horizontal=True,
+                      index=1 if has_tracked_data(client) else 0)
     use_sample = source != UPLOAD_OR_PASTE
     uploaded = st.file_uploader("Upload CSV (comma, tab, semicolon or pipe separated)",
                                 type=UPLOAD_TYPES, disabled=use_sample)
@@ -130,16 +163,12 @@ def main():
     st.download_button("Download a synthetic example CSV", EXAMPLE_CSV,
                        file_name=EXAMPLE_FILE_NAME, mime="text/csv")
 
-    show_tracked_csv_panel(uploaded.name if uploaded is not None else None,
-                           uploaded.getvalue() if uploaded is not None else None)
-
-    if source == TRACKED_CSV:
-        settings = load_settings()
-        if not settings.tracked_csv.exists():
-            st.info("No tracked CSV yet: upload one and click **Track ... for daily updates**.")
-            return
-        name, content, symbol = (settings.tracked_csv.name, settings.tracked_csv.read_bytes(),
-                                 settings.tracked_symbol)
+    tracked = None
+    if source == TRACKED_DATA:
+        tracked = show_tracked_data(client)
+        if tracked is None:
+            return None
+        name, content, symbol = tracked.file_name, tracked.content, tracked.symbol
     elif source == SAMPLE_ONE:
         name, content, symbol = SAMPLE_CSV.name, SAMPLE_CSV.read_bytes(), SAMPLE_SYMBOL
     elif source == SAMPLE_THREE:
@@ -153,7 +182,7 @@ def main():
         name, content, symbol = PASTED_FILE_NAME, pasted_bytes(pasted), None
     else:
         st.info("Upload or paste data, or choose a sample above, to begin.")
-        return
+        return None
 
     # A Symbol column in the data is used as-is. Without one, ask the user:
     # the symbol is never guessed.
@@ -164,14 +193,16 @@ def main():
                                help="Press Enter (or click elsewhere) after typing.")
         if not symbol.strip():
             prompt.warning("This data has no Symbol column. Enter the stock symbol to continue.")
-            return
+            return None
         prompt.caption("This data has no Symbol column; using the symbol entered below.")
         outcome = run_import(name, content, symbol)
 
+    allow_ai = False
     if outcome.selection is not None and outcome.selection.ai_sourced_rows:
         if st.checkbox("Include secondary AI-sourced prices (Gemini) in the analysis",
                        key="allow_ai_sourced",
                        help="Not recommended: Gemini prices are not official exchange data."):
+            allow_ai = True
             outcome = run_import(name, content, symbol, allow_ai_sourced=True)
         show_ai_sourced_notice(outcome.selection)
 
@@ -181,11 +212,64 @@ def main():
             with st.expander("Technical details"):
                 st.code(outcome.error_detail)
     if outcome.import_result is None:
-        return
-
-    show_import(outcome.import_result)
+        return None
     if outcome.returns is None:
-        return
+        show_import(outcome.import_result)
+        return None
+
+    report = outcome.import_result.report
+    st.success(f"{len(report.symbols)} compan{'y' if len(report.symbols) == 1 else 'ies'} "
+               f"({', '.join(report.symbols)}), {outcome.import_result.validation.trading_days} "
+               f"trading days from {report.date_min} to {report.date_max}. Data check: "
+               f"{report.status}. Details under See Calculations.", icon="✅")
+    if source == UPLOAD_OR_PASTE:
+        show_start_tracking(client, name, content, symbol, purpose=mode)
+    return outcome, tracked, name, symbol, allow_ai
+
+
+def choose_market_index():
+    """Optional market index for the regime. Returns (data, index name, note to show)."""
+    with st.expander("Market index (optional): shows the current market regime"):
+        source = st.radio("Index data", [INDEX_NONE, INDEX_UPLOAD, INDEX_SAMPLE], horizontal=True,
+                          key="index_source")
+        note, chosen = None, None
+        if source == INDEX_NONE:
+            return None, None, None
+        if source == INDEX_SAMPLE:
+            note = ("Synthetic sample index: invented values for demonstration. They are not "
+                    "real ASPI or S&P SL20 index levels.")
+            st.info(note)
+            file_name, content = INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes()
+        else:
+            uploaded = st.file_uploader("Index CSV (Date, Index, Close or Price)",
+                                        type=UPLOAD_TYPES, key="index_upload")
+            chosen = st.selectbox("Index name (used only when the file has no Index column)",
+                                  KNOWN_INDEXES)
+            if uploaded is None:
+                st.info("Upload an index price file to see its market regime.")
+                return None, None, None
+            file_name, content = uploaded.name, uploaded.getvalue()
+
+        imported, error = load_index_data(file_name, content, chosen)
+        if error:
+            st.error(error)
+            return None, None, None
+        if imported.invalid_rows:
+            issues = ", ".join(f"{code} {count}" for code, count in imported.issue_counts.items())
+            st.warning(f"{imported.invalid_rows} INVALID row(s) are excluded (never bridged): "
+                       f"{issues}.")
+        names = imported.index_names
+        index_name = names[0] if len(names) == 1 else st.selectbox("Index", names)
+        return imported.data, index_name, note
+
+
+def show_calculations(outcome, tracked, name, symbol, allow_ai, defaults, index_data,
+                      index_name, index_note):
+    """The full quantitative analysis, starting from the inputs above."""
+    st.caption("The full analysis behind the recommendation. Settings here start from your "
+               "inputs above; changing them here doesn't change the recommendation.")
+    show_step("1 · Market Data", "Every row is validated and keeps its source.")
+    show_import(outcome.import_result)
     show_step("2 · Risk & Return", "How each stock has moved: returns, volatility, co-movement, "
               "drawdowns and risk-adjusted return.")
     show_returns(outcome.returns)
@@ -197,23 +281,31 @@ def main():
               "position can be sold.")
     confidence, minimum = show_var(outcome)
     show_cvar(outcome, confidence, minimum)
-    participation = show_liquidity(outcome)
+    participation = show_liquidity(outcome, defaults.get("portfolio_value"))
     show_step("4 · Portfolio Construction", "Your holdings as one portfolio, and a risk-aware "
               "optimized allocation.")
-    holdings, value = show_portfolio_risk(outcome, confidence, minimum, periods, participation)
+    holdings, value = show_portfolio_risk(outcome, confidence, minimum, periods, participation,
+                                          defaults.get("holdings_text"),
+                                          defaults.get("portfolio_value"))
     optimizer_settings = show_optimization(outcome, confidence, minimum, periods, value,
-                                           participation)
+                                           participation, defaults.get("optimizer"),
+                                           defaults.get("universe"))
     show_step("5 · Market Context & Scenarios", "The current market regime and hypothetical "
               "stress scenarios.")
-    index_data, index_name = show_market_regime()
+    show_market_regime(index_data, index_name, index_note)
     show_stress_testing(outcome, holdings, value, confidence, minimum, participation)
     show_step("6 · Historical Validation", "Walk-forward test of the allocation process on "
-              "unseen data.")
-    show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name)
+              "unseen data." + (" It uses your original uploaded history only; days collected "
+                                "since then aren't added to the backtest." if tracked else ""))
+    backtest_data = outcome
+    if tracked is not None and tracked.collected:
+        backtest_data = run_import(name, tracked.original_content, symbol, allow_ai_sourced=allow_ai)
+    show_backtesting(backtest_data, periods, minimum, optimizer_settings, index_data, index_name,
+                     defaults.get("portfolio_value"))
     show_step("7 · Exit Decision", "Can the amount you need be withdrawn under current "
               "conditions?")
     show_exit_safety(outcome, holdings, value, participation, confidence, minimum, periods,
-                     index_data, index_name)
+                     index_data, index_name, defaults.get("exit_target"))
 
 
 def show_step(title, caption):
@@ -478,7 +570,7 @@ def show_cvar(outcome, confidence, minimum):
             "not a prediction.")
 
 
-def show_liquidity(outcome):
+def show_liquidity(outcome, value_default=None):
     data = outcome.import_result.data
     st.divider()
     st.subheader("Liquidity Analysis")
@@ -489,12 +581,15 @@ def show_liquidity(outcome):
                 "close × volume. That is an estimate, not official turnover.")
 
     left, right = st.columns(2)
-    value = left.number_input("Position Value (Rs.)", value=20_000_000.0, step=1_000_000.0,
-                              min_value=1.0, format="%.2f")
+    value = left.number_input("Position Value (Rs.)", value=value_default, step=1_000_000.0,
+                              min_value=1.0, format="%.2f", placeholder="Enter an amount")
     rate = right.number_input("Participation Rate (%)", value=10.0, step=1.0, min_value=0.01,
                               max_value=100.0, format="%.2f")
     st.caption("Estimated liquidation time — based on assumed participation rate. The same "
                "position value is assessed for each stock separately (not a portfolio).")
+    if value is None:
+        st.info("Enter a position value to estimate liquidation times.")
+        return rate
     positions, error = position_liquidity(data, value, rate)
     if error:
         st.error(error)
@@ -530,7 +625,8 @@ def show_liquidity(outcome):
     return rate
 
 
-def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
+def show_portfolio_risk(outcome, confidence, minimum, periods, participation,
+                        holdings_default=None, value_default=None):
     data = outcome.import_result.data
     st.divider()
     st.subheader("Portfolio Risk Analysis")
@@ -539,13 +635,18 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
                "automatically.")
     symbols = sorted(data["symbol"].dropna().unique())
     holdings_text = st.text_area("Holdings (Symbol, Weight %)",
-                                 value=default_holdings_text(symbols), height=140)
-    value = st.number_input("Portfolio Value (Rs.)", value=20_000_000.0, step=1_000_000.0,
-                            min_value=1.0, format="%.2f")
+                                 value=holdings_default or default_holdings_text(symbols),
+                                 height=140)
+    value = st.number_input("Portfolio Value (Rs.)", value=value_default, step=1_000_000.0,
+                            min_value=1.0, format="%.2f", placeholder="Enter an amount")
     st.caption(f"Uses the inputs above: {confidence:g}% confidence, at least {minimum} "
                f"observations for VaR/CVaR, {periods} periods per year and a {participation:g}% "
                "participation rate.")
 
+    if value is None:
+        st.info("Enter the portfolio value (your amount above, or here) to see portfolio "
+                "calculations.")
+        return None, None
     holdings, error = parse_holdings(holdings_text)
     if error:
         st.error(error)
@@ -597,28 +698,36 @@ def show_portfolio_risk(outcome, confidence, minimum, periods, participation):
     return holdings, value
 
 
-def show_optimization(outcome, confidence, minimum, periods, portfolio_value, participation):
+def show_optimization(outcome, confidence, minimum, periods, portfolio_value, participation,
+                      settings_default=None, universe_default=None):
     data = outcome.import_result.data
     st.divider()
     st.subheader("Risk-Aware Portfolio Optimization")
     st.caption("Chooses long-only, fully invested weights for the selected stocks. A historical "
                "quantitative allocation model, not a guarantee of future returns.")
     symbols = sorted(data["symbol"].dropna().unique())
-    universe = st.multiselect("Stocks to optimize (universe)", symbols, default=symbols)
+    start = settings_default or {}
+    chosen = [s for s in (universe_default or []) if s in symbols] or symbols
+    universe = st.multiselect("Stocks to optimize (universe)", symbols, default=chosen)
     left, right = st.columns(2)
-    min_percent = left.number_input("Minimum Weight (%)", value=0.0, step=1.0, min_value=0.0,
-                                    max_value=100.0, format="%.2f")
-    max_percent = right.number_input("Maximum Weight (%)", value=40.0, step=5.0, min_value=0.0,
-                                     max_value=100.0, format="%.2f")
+    min_percent = left.number_input("Minimum Weight (%)", value=start.get("min_percent", 0.0),
+                                    step=1.0, min_value=0.0, max_value=100.0, format="%.2f")
+    max_percent = right.number_input("Maximum Weight (%)", value=start.get("max_percent", 40.0),
+                                     step=5.0, min_value=0.0, max_value=100.0, format="%.2f")
     first, second, third = st.columns(3)
-    risk_aversion = first.number_input("Risk Aversion", value=1.0, step=0.5, min_value=0.0)
-    cvar_weight = second.number_input("CVaR Weight", value=1.0, step=0.5, min_value=0.0)
-    return_weight = third.number_input("Return Weight", value=1.0, step=0.5, min_value=0.0)
-    enabled = st.checkbox("Enable Liquidity Constraint", value=False)
+    risk_aversion = first.number_input("Risk Aversion", value=start.get("risk_aversion", 1.0),
+                                       step=0.5, min_value=0.0)
+    cvar_weight = second.number_input("CVaR Weight", value=start.get("cvar_weight", 1.0),
+                                      step=0.5, min_value=0.0)
+    return_weight = third.number_input("Return Weight", value=start.get("return_weight", 1.0),
+                                       step=0.5, min_value=0.0)
+    enabled = st.checkbox("Enable Liquidity Constraint",
+                          value=start.get("liquidity_enabled", False))
     limit = None
     if enabled:
-        limit = st.number_input("Maximum Position / ADTV", value=10.0, step=1.0, min_value=0.01,
-                                format="%.2f")
+        limit = st.number_input("Maximum Position / ADTV",
+                                value=start.get("max_position_to_adtv") or 10.0, step=1.0,
+                                min_value=0.01, format="%.2f")
         st.caption(f"Each position is limited to {limit:g} × its average daily traded value: "
                    f"about {limit / (participation / 100):,.0f} trading days to exit at the "
                    f"{participation:g}% participation rate set in Liquidity Analysis.")
@@ -626,6 +735,9 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
                 "risk_aversion": risk_aversion, "cvar_weight": cvar_weight,
                 "return_weight": return_weight, "liquidity_enabled": enabled,
                 "max_position_to_adtv": limit}
+    if portfolio_value is None:
+        st.info("Enter the portfolio value in Portfolio Risk Analysis to run the optimization.")
+        return settings
     st.caption(f"Uses the inputs above: Portfolio Value Rs. {portfolio_value:,.2f}, "
                f"{confidence:g}% confidence, at least {minimum} common observations and "
                f"{periods} periods per year.")
@@ -676,46 +788,22 @@ def show_optimization(outcome, confidence, minimum, periods, portfolio_value, pa
     return settings
 
 
-def show_market_regime():
+def show_market_regime(index_data, index_name, note=None):
     st.divider()
     st.subheader("Market Regime")
-    st.caption("Uses a market-index series (for example ASPI or S&P SL20), separate from the "
-               "stock data above.")
-    source = st.radio("Index data", [INDEX_SAMPLE, INDEX_UPLOAD], horizontal=True)
-    chosen = None
-    if source == INDEX_SAMPLE:
-        st.info("Synthetic sample index: invented values for demonstration. They are not real "
-                "ASPI or S&P SL20 index levels.")
-        file_name, content = INDEX_SAMPLE_CSV.name, INDEX_SAMPLE_CSV.read_bytes()
-    else:
-        uploaded = st.file_uploader("Index CSV (Date, Index, Close or Price)", type=UPLOAD_TYPES,
-                                    key="index_upload")
-        chosen = st.selectbox("Index name (used only when the file has no Index column)",
-                              KNOWN_INDEXES)
-        if uploaded is None:
-            st.info("Upload an index price file to see its market regime.")
-            return None, None
-        file_name, content = uploaded.name, uploaded.getvalue()
-
-    imported, error = load_index_data(file_name, content, chosen)
+    st.caption("Uses the market index chosen under Market index above (for example ASPI or "
+               "S&P SL20), separate from the stock data.")
+    if note:
+        st.info(note)
+    if index_data is None:
+        st.info("No market index chosen. Choose one under **Market index (optional)** above to "
+                "see the market regime.")
+        return
+    st.markdown(f"Index: **{index_name}**")
+    result, error = market_regime(index_data, index_name)
     if error:
         st.error(error)
-        return None, None
-    if imported.invalid_rows:
-        issues = ", ".join(f"{code} {count}" for code, count in imported.issue_counts.items())
-        st.warning(f"{imported.invalid_rows} INVALID row(s) are excluded (never bridged): "
-                   f"{issues}.")
-
-    names = imported.index_names
-    if len(names) == 1:
-        index_name = names[0]
-        st.markdown(f"Index: **{index_name}**")
-    else:
-        index_name = st.selectbox("Index", names)
-    result, error = market_regime(imported.data, index_name)
-    if error:
-        st.error(error)
-        return imported.data, index_name
+        return
 
     if result.current.regime == REGIME_UNDEFINED:
         st.warning(f"Warm-up: {index_name} has {result.observations} usable observation(s); a "
@@ -758,18 +846,17 @@ def show_market_regime():
             "regime is shown rather than a false Normal.\n"
             "- The rules are checked in the order Stress, Recovery, High volatility, Normal. All "
             "thresholds are configurable model assumptions, not market rules.")
-    return imported.data, index_name
 
 
 def show_stress_testing(outcome, holdings, portfolio_value, confidence, minimum, participation):
     st.divider()
     st.subheader("Stress Testing")
-    st.caption("Hypothetical adverse scenarios for the holdings entered in Portfolio Risk "
-               f"Analysis (Portfolio Value Rs. {portfolio_value:,.2f}). These are assumptions, "
-               "not forecasts.")
     if holdings is None:
         st.info("Enter valid holdings in Portfolio Risk Analysis to run the stress tests.")
         return
+    st.caption("Hypothetical adverse scenarios for the holdings entered in Portfolio Risk "
+               f"Analysis (Portfolio Value Rs. {portfolio_value:,.2f}). These are assumptions, "
+               "not forecasts.")
 
     baseline = st.radio("Base return", list(BASELINE_LABELS), horizontal=True,
                         format_func=BASELINE_LABELS.get)
@@ -853,7 +940,8 @@ def show_stress_testing(outcome, holdings, portfolio_value, confidence, minimum,
             "hypothetical number. Neither is a buy or sell recommendation.")
 
 
-def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name):
+def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, index_name,
+                     capital_default=None):
     data = outcome.import_result.data
     st.divider()
     st.subheader("Backtesting")
@@ -862,8 +950,8 @@ def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, 
                "Optimization above.")
     symbols = sorted(data["symbol"].dropna().unique())
     left, right = st.columns(2)
-    capital = left.number_input("Initial Capital (Rs.)", value=1_000_000.0, step=100_000.0,
-                                min_value=1.0, format="%.2f")
+    capital = left.number_input("Initial Capital (Rs.)", value=capital_default, step=100_000.0,
+                                min_value=1.0, format="%.2f", placeholder="Enter an amount")
     risk_free = right.number_input("Risk-Free Rate (%) for the backtest", value=0.0, step=0.25,
                                    min_value=-99.0, max_value=1000.0, format="%.2f")
     first, second, third = st.columns(3)
@@ -881,6 +969,9 @@ def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, 
            tuple(selected), capital, risk_free, training, test, rebalance, confidence, minimum,
            periods, tuple(sorted(optimizer_settings.items())), index_name,
            None if index_data is None else len(index_data))
+    if capital is None:
+        st.info("Enter the initial capital to run the backtest.")
+        return
     if st.button("Run Backtest"):
         with st.spinner("Running the walk-forward backtest..."):
             result, error = run_backtest(data, selected, capital, training, test, rebalance,
@@ -942,7 +1033,7 @@ def show_backtesting(outcome, periods, minimum, optimizer_settings, index_data, 
 
 
 def show_exit_safety(outcome, holdings, portfolio_value, participation, confidence, minimum,
-                     periods, index_data, index_name):
+                     periods, index_data, index_name, target_default=None):
     st.divider()
     st.subheader("Exit Safety Assessment")
     st.caption("Can the requested amount reasonably be exited under the current quantitative "
@@ -953,8 +1044,9 @@ def show_exit_safety(outcome, holdings, portfolio_value, participation, confiden
         return
 
     left, right = st.columns(2)
-    target = left.number_input("Target Exit Amount (Rs.)", value=5_000_000.0, step=500_000.0,
-                               min_value=0.0, format="%.2f")
+    target = left.number_input("Target Exit Amount (Rs.)", value=target_default,
+                               step=500_000.0, min_value=0.0, format="%.2f",
+                               placeholder="Enter an amount")
     scenario = right.selectbox("Stress Scenario", EXIT_STRESS_SCENARIOS)
     liquidity_stress = st.checkbox("Apply Liquidity -50% (half the trading capacity)")
     with st.expander("Policy settings (model assumptions)"):
@@ -985,6 +1077,9 @@ def show_exit_safety(outcome, holdings, portfolio_value, participation, confiden
                f"{confidence:g}% confidence and the market index from Market Regime "
                f"({index_name or 'none loaded'}).")
 
+    if target is None:
+        st.info("Enter the amount you may need to withdraw to assess the exit.")
+        return
     result, error = exit_safety(outcome.import_result.data, holdings, portfolio_value, target,
                                 participation, scenario, liquidity_stress, policy, confidence,
                                 minimum, periods, index_data, index_name)

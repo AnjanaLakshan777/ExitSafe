@@ -96,7 +96,10 @@ def show_threat_panel():
 
 
 def show_tracked_csv_panel(upload_name=None, upload_content=None):
-    """Save the current upload as the bot's tracked CSV, and update its prices on demand."""
+    """Save the current upload as the bot's tracked CSV, and update its prices on demand.
+
+    For single-file setups; the main dashboard uses tracked market data (app/ui/tracking_panel.py).
+    """
     settings = load_settings()
     path = settings.tracked_csv
     with st.expander("📈 Daily price updates (tracked CSV)"):
@@ -107,7 +110,7 @@ def show_tracked_csv_panel(upload_name=None, upload_content=None):
         if upload_content is not None and st.button(f"Track `{upload_name}` for daily updates",
                                                     key="track_csv"):
             save_tracked_csv(upload_content, path)
-            st.success("Saved. Choose **Bot-tracked CSV** above to analyse the updated file.")
+            st.success("Saved. The bot will add each new trading day to this file.")
         if not path.exists():
             st.info("No tracked CSV yet. Upload your market-data CSV above, then click "
                     "**Track ... for daily updates**.")

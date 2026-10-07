@@ -1,7 +1,8 @@
 """ExitSafe market-threat bot.
 
     python -m app.intelligence.bot              # run forever: scan news every BOT_INTERVAL_MINUTES,
-                                                # update the tracked CSV once a day after the CSE close
+                                                # update tracked market data once a day after the
+                                                # CSE close (database datasets and the tracked CSV)
     python -m app.intelligence.bot --once       # one news scan + one price update, then exit
     python -m app.intelligence.bot --news-only  # skip price updates
     python -m app.intelligence.bot --prices-only --once
@@ -15,13 +16,14 @@ import time
 from datetime import datetime
 
 from app.intelligence.collectors.price_collector import COLOMBO
+from app.intelligence.market_tracking import UPDATE_HOUR, run_scheduled_update
 from app.intelligence.price_updater import TrackedCsvError, update_tracked_csv
 from app.intelligence.settings import load_settings
 from app.intelligence.threat_scan import run_threat_scan
 
 log = logging.getLogger("exitsafe.bot")
 # CSE closes at 14:30 Colombo time; prices are fetched from this hour on.
-PRICE_UPDATE_HOUR = 15
+PRICE_UPDATE_HOUR = UPDATE_HOUR
 
 
 def scan_news(settings):
@@ -38,7 +40,15 @@ def scan_news(settings):
 
 
 def update_prices(settings):
-    """Returns True if the update ran (whether or not there were new rows)."""
+    """Returns True once today's prices needn't be fetched again."""
+    tracked = run_scheduled_update(settings)
+    return update_tracked_file(settings) and not tracked.retry_later
+
+
+def update_tracked_file(settings):
+    """The single tracked CSV (local setups). True if it was updated or there is none."""
+    if not settings.tracked_csv.exists():
+        return True
     try:
         result = update_tracked_csv(settings)
     except TrackedCsvError as exc:

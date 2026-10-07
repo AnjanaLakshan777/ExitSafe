@@ -8,9 +8,18 @@ ExitSafe is a quantitative investment analysis application built around a simple
 
 Most portfolio analysis focuses on return and risk. ExitSafe goes a step further by also looking at **liquidity and the practical difficulty of getting money out of a portfolio**, especially when market conditions become difficult.
 
-The system combines market-data analysis, portfolio risk measurement, risk-aware optimization, stress testing, backtesting, market-regime analysis and an **Exit Safety Engine** into one workflow. Around that core, a **market-threat bot** watches world financial news and emails alerts, keeps a tracked price file up to date every trading day, and **client accounts** stored in PostgreSQL let each investor log in and record their own investments.
+The system combines market-data analysis, portfolio risk measurement, risk-aware optimization, stress testing, backtesting, market-regime analysis and an **Exit Safety Engine** into one workflow. Around that core, a **market-threat bot** watches world financial news and emails alerts, **tracked market data** keeps each investor's uploaded companies up to date every trading day, and **client accounts** stored in PostgreSQL let each investor log in and record their own investments.
 
 The project is being developed with the Sri Lankan equity market in mind, while keeping the data and analytics layer flexible enough to work with compatible market-data sources.
+
+## Two ways to use ExitSafe
+
+ExitSafe helps investors understand what to do, not only how the calculations work. After logging in, the first question is **"What are you trying to do?"**
+
+1. **Start Investing** (new investor): enter the amount to invest, how long the money can stay invested, a risk preference and the companies you're considering. ExitSafe suggests how to split the money, checks the risk and liquidity of that mix, and recommends an action.
+2. **I Already Invested** (existing investor): enter how many shares you hold of each company. ExitSafe values them at the latest approved market price, shows the portfolio's current value, status and main risks and, if you enter an amount you may need, whether you can withdraw it safely.
+
+Both follow the same order: **your information → a simple recommendation → why → the full calculations**. The recommendation is a transparent, rule-based reading of ExitSafe's own calculations, not a prediction or an AI model; market news is shown as context and never changes it. See `docs/RECOMMENDATIONS.md` for the exact rules.
 
 ---
 
@@ -160,17 +169,19 @@ A background bot watches world financial news for events that could hurt the mar
 
 **How Gemini is used.** Gemini is optional. It adds extra threat stories to a scan, and it fills in daily prices for symbols the CSE snapshot doesn't list. Prices found this way are stored as secondary AI-sourced data (`gemini_web_search`) and are left out of the quantitative analysis unless the user chooses to include them. Gemini calls depend on the quota available to the API key. When Gemini is unavailable, scans and price updates carry on with the RSS/HTML feeds and CSE data, and the dashboard shows why Gemini was skipped. During final testing the project's key had reached its quota, so the Gemini paths were verified with simulated responses rather than a live answer.
 
-### 13. Daily Price Updates
+### 13. Tracked Market Data (Daily Price Updates)
 
-The bot can append each new trading day's prices to a tracked market-data CSV, so the analysis keeps running on current data.
+Upload your historical market data once. ExitSafe can continue tracking the selected companies and update the dataset with newly available market data, so you don't need to upload the file again.
 
-- Prices come from the official **Colombo Stock Exchange** data first. Gemini web search is used only as a fallback for symbols the CSE does not list.
-- Every new row names its source in a **Source** column: `cse_trade_summary_current` (official CSE, primary) or `gemini_web_search` (secondary AI-sourced data, not exchange data). Older rows are left with an empty source rather than a guessed one.
-- **Gemini prices are left out of the quantitative analysis by default.** The dashboard lists them and only uses them if you tick *Include secondary AI-sourced prices*, with a warning. See `docs/DATA_SOURCES.md` (section 5).
-- New rows are written in the file's own layout (columns, delimiter and date format).
-- Existing rows are never changed. A backup is taken before every write, and a date already in the file is skipped.
-- A stock that did not trade gets no row, instead of a stale price.
-- Choose the CSV to track from the dashboard (**Bot-tracked CSV** data source).
+- After uploading, click **Start tracking** and say whether you are *starting to invest* or *already invested*. Your file and the companies in it are saved to your account.
+- Next time, choose **My tracked market data**. The dashboard shows the last market date, when the data was last updated, how many companies were updated, and anything that couldn't be updated and why. **Update now** fetches the latest prices on demand; **Pause tracking** stops updates.
+- New prices are collected after the market closes, never while the session is still open, and never dated in the future. Each one is checked by the same validator as an upload.
+- Prices come from the official **Colombo Stock Exchange** data first. Gemini web search is only a fallback for companies the CSE does not list.
+- Gemini prices are clearly labelled as **secondary AI-sourced data** and are **left out of the quantitative analysis by default**. The dashboard lists them and only uses them if you tick *Include secondary AI-sourced prices*, with a warning. See `docs/DATA_SOURCES.md` (section 5).
+- Your original file is kept exactly as uploaded. New days are added after it, and its own values are never replaced.
+- A stock that did not trade gets no new day, instead of a repeated price. Days the CSE can no longer provide (for example while updates weren't running) stay empty and are reported.
+- The data is kept in the application's database, so tracking carries on after a refresh, a restart or a redeployment. Automatic updates need the scheduled update service to be running; see `docs/TRACKED_MARKET_DATA.md`.
+- Backtests keep using your original uploaded history; the newly collected days feed the current portfolio analysis and Exit Safety.
 
 ### 14. Client Accounts & Investments
 
@@ -183,7 +194,18 @@ Investors register and log in before using the dashboard. Accounts and investmen
 
 ### 15. Investment Dashboard
 
-The Streamlit dashboard brings the results together in one place, from login, threat alerts and market-data validation through individual stock analysis, portfolio construction, backtesting and the final Exit Safety Assessment.
+The Streamlit dashboard starts with the two journeys. For **Start Investing** it shows the recommended allocation, the suggested action, why, and the key numbers in plain words (for example *risk of large loss* for CVaR and *estimated time to sell* for liquidation days). For **I Already Invested** it shows the portfolio overview, the *Should I exit?* check, the recommendation and why. World market threats follow as context.
+
+**See Calculations** opens the complete analysis underneath: market-data validation, individual stock analysis, portfolio construction, market regime, stress testing, backtesting and the full Exit Safety Assessment. It starts from the same inputs, so the numbers match the recommendation.
+
+### 16. Recommendation (Interpretation Layer)
+
+A small set of fixed rules (`app/ui/decision.py`) turns the engines' results into an action:
+
+- **Start Investing:** *Proceed with this allocation*, *Invest gradually*, *Review the candidates* or *Insufficient data*.
+- **I Already Invested:** *Hold*, *Reduce exposure*, *Consider a staged exit*, *Review your portfolio* or *Insufficient data*, with a portfolio status of GOOD, CAUTION, AT RISK or INSUFFICIENT DATA taken from the Exit Safety Engine.
+
+Every action comes with two to five evidence points that quote the calculated numbers. The rules use the Exit Safety Engine's existing thresholds and never use news or Gemini results. This is an interpretation layer, not predictive AI.
 
 ---
 
@@ -545,7 +567,7 @@ ExitSafe uses a **modular monolith** architecture. It is one application, but it
 
 ### Data Layer
 
-Handles loading, normalization, schemas, validation, provenance and source-related information. It also holds the client repository (`app/data/repositories/client_repository.py`), which stores client accounts and investments in PostgreSQL through SQLAlchemy.
+Handles loading, normalization, schemas, validation, provenance and source-related information. It also holds the repositories that store client accounts and investments (`client_repository.py`) and tracked market data (`tracking_repository.py`) in PostgreSQL through SQLAlchemy.
 
 ### Analytics Layer
 
@@ -573,21 +595,21 @@ Combines liquidity, CVaR and stress information to produce the final Exit Safety
 
 ### Intelligence Layer
 
-The market-threat bot. It collects news, classifies events, rates severity and source confidence, stores threats, sends email alerts and updates the tracked price CSV. Only `app/intelligence/collectors/` may access the network.
+The market-threat bot and market-data tracking. It collects news, classifies events, rates severity and source confidence, stores threats, sends email alerts, and collects each session's prices for tracked market data. Only `app/intelligence/collectors/` may access the network.
 
 ### Recommendation Layer
 
-Planned, not yet implemented. Its intended role is to combine event intelligence, market behaviour and portfolio exposure into risk signals with plain-language explanations (and never a predicted price). For now the module only defines those data types and the explanation format, and the application does not call it.
+The `app/recommendation/` package (event-driven risk signals) is planned, not implemented; the application does not call it.
 
-In the current version, the quantitative analysis produces the evidence, the Exit Safety Engine produces the exit-risk status, and external intelligence provides context. The final investment decision is interpreted from these outputs by the user.
+The recommendations users see come from the interpretation layer in the UI (`app/ui/decision.py`, see `docs/RECOMMENDATIONS.md`): fixed rules that read the optimizer, portfolio risk and Exit Safety results and explain them in plain language. The quantitative analysis produces the evidence, the Exit Safety Engine produces the exit-risk status, and external intelligence is shown as context only.
 
 ### Scheduler
 
-Defines the periodic jobs (collect intelligence, refresh market data, archive events).
+Defines the periodic jobs (collect intelligence, refresh market data, archive events) and the one-shot tracked-market-data update used by scheduled jobs.
 
 ### UI Layer
 
-The Streamlit interface provides login and registration, the client's investments, threat alerts, the inputs, calculations, charts, tables and final investment-oriented results.
+The Streamlit interface provides login and registration, the two user journeys with their recommendations, the client's investments, threat alerts, tracked market data, and the full calculations, charts and tables under See Calculations.
 
 The module boundaries are enforced by `tests/test_architecture.py`: data → analytics → intelligence → recommendation → scheduler, and each module may only import from the modules to its left.
 
@@ -642,7 +664,8 @@ ExitSafe/
 │   │   ├── cleaners/
 │   │   ├── loaders/
 │   │   ├── repositories/
-│   │   │   └── client_repository.py   # PostgreSQL clients + investments
+│   │   │   ├── client_repository.py   # PostgreSQL clients + investments
+│   │   │   └── tracking_repository.py # tracked market data
 │   │   ├── schemas/
 │   │   └── validators/
 │   ├── exit_engine/
@@ -655,6 +678,7 @@ ExitSafe/
 │   │   ├── parsers/
 │   │   ├── signals/
 │   │   ├── dashboard.py               # Streamlit threat + tracked-CSV panels
+│   │   ├── market_tracking.py         # tracked market data: setup + daily update
 │   │   ├── notifier.py                # email alerts
 │   │   ├── price_updater.py
 │   │   ├── settings.py
@@ -666,13 +690,17 @@ ExitSafe/
 │   ├── regime/
 │   │   └── regime_detector.py
 │   ├── scheduler/
-│   │   └── jobs.py
+│   │   ├── jobs.py
+│   │   └── update_market_data.py      # one tracked-data update (for cron)
 │   ├── stress_testing/
 │   │   └── stress_engine.py
 │   └── ui/
 │       ├── auth.py                    # login, register, my investments
 │       ├── console.py
-│       └── streamlit_app.py
+│       ├── decision.py                # recommendation rules (interpretation layer)
+│       ├── journeys.py                # Start Investing / I Already Invested
+│       ├── streamlit_app.py
+│       └── tracking_panel.py          # tracked market data panel
 │
 ├── data/
 │   ├── raw/
@@ -792,7 +820,7 @@ ALERT_EMAIL_TO=
 python scripts/init_client_db.py
 ```
 
-This creates the database if it does not exist, plus the `clients` and `investments` tables. It is safe to run again.
+This creates the database if it does not exist, plus the tables for client accounts, investments and tracked market data. It is safe to run again.
 
 ## 6. Start the application
 
@@ -806,9 +834,9 @@ Then open the local Streamlit URL shown in the terminal, usually:
 http://localhost:8501
 ```
 
-Register an account on the **Register** tab, then use the dashboard.
+Register an account on the **Register** tab, then choose **Start Investing** or **I Already Invested**.
 
-## 7. Run the market-threat bot (optional)
+## 7. Run the market-threat bot and the update service
 
 ```bash
 python -m app.intelligence.bot                         # run continuously
@@ -817,7 +845,7 @@ python -m app.intelligence.bot --news-only             # skip price updates
 python -m app.intelligence.bot --prices-only --once    # only update prices
 ```
 
-The bot scans news every `BOT_INTERVAL_MINUTES` (default 30) and updates the tracked CSV once a day after the CSE close.
+The bot scans news every `BOT_INTERVAL_MINUTES` (default 30) and updates tracked market data once a day after the CSE close. Tracked market data only updates automatically while this process (or the scheduled job described in `docs/TRACKED_MARKET_DATA.md`) is running.
 
 ---
 
@@ -829,9 +857,9 @@ Run the complete test suite with:
 python -m pytest
 ```
 
-The current suite has **1,115 tests passed**, with no failures. They cover the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, the Exit Safety Engine, the market-threat bot, the client database, login and registration, UI checks and module-boundary rules.
+The current suite has **1,223 tests passed**, with no failures. They cover the data layer, analytics, portfolio risk, optimization, market regimes, stress testing, backtesting, the Exit Safety Engine, the recommendation rules and both user journeys, the market-threat bot, tracked market data, the client database, login and registration, UI checks and module-boundary rules.
 
-The client-database and login tests use a temporary in-memory SQLite database, so they do not need PostgreSQL running.
+The client-database, login and tracked-market-data tests use a temporary SQLite database and simulated CSE/Gemini responses, so they do not need PostgreSQL or a network connection.
 
 ---
 
@@ -867,6 +895,8 @@ With a 10% participation assumption, an example assessment is:
 | Exit Safety | **CAUTION** |
 
 Here the exit horizon is above the default 5-day safe level, and the default `Market -10%` scenario reaches the 10% stress-loss caution threshold.
+
+In the **I Already Invested** journey this investor sees a portfolio status of **AT RISK** (selling all Rs. 20M would take about 63 trading days because LMN trades thinly) and, for the Rs. 5M withdrawal, the suggested action **Consider a staged exit**, with LMN's 15.7 days as the main reason.
 
 The result is an assessment based on the configured model assumptions, not a guarantee of execution.
 
@@ -912,7 +942,8 @@ The supporting features have their own limits:
 - **Gemini:** live answers depend on the API key's quota; without it, the app runs on CSE and RSS/HTML data only.
 - **Threat bot:** classification is keyword-based, and news and web-search results are unverified claims. The company-disclosure, market-event and threat-intelligence collectors are not implemented yet.
 - **Client accounts:** a login lasts only for the browser session, so refreshing the page signs the client out. There is no password reset or email verification yet.
-- **Investments:** saved holdings are not yet fed into the portfolio analysis automatically.
+- **Investments:** in *I Already Invested*, saved holdings can fill in the portfolio (shares, plus the original investment for reference). Their current value uses the latest approved price in the loaded data; a holding without a price is flagged and left out rather than given an assumed price. Purchase prices aren't used by the analysis.
+- **Tracked market data:** the CSE source only provides the latest session, so days missed while the update service wasn't running can't be recovered and stay empty. Automatic updates need the update service running alongside the dashboard. Market holidays aren't known in advance; on those days an update simply finds nothing new.
 
 A `SAFE` result means the portfolio passed the configured model checks. It does **not** guarantee that the requested amount can be executed exactly as planned in the real market.
 
@@ -936,13 +967,14 @@ The core ExitSafe quantitative pipeline is implemented, including:
 - Walk-forward backtesting
 - Exit Safety Engine
 - Market-threat bot with news collection, Gemini web search and email alerts
-- Daily CSE price updates for a tracked CSV
+- Tracked market data: upload once, then daily CSE price updates stored in PostgreSQL
 - Client registration and login with hashed passwords
 - Client investments stored in PostgreSQL
+- Two user journeys (Start Investing, I Already Invested) with plain-language, rule-based recommendations
 - Streamlit dashboard
 - Automated testing
 
-Future work can extend the system with stronger market-impact modelling, transaction-cost and slippage models, optimized liquidation ordering, richer intraday liquidity analysis and advanced regime models. Other planned work: official disclosure and threat-intelligence collectors, persistent login sessions with password reset, and using each client's saved investments directly in the portfolio and Exit Safety analysis.
+Future work can extend the system with stronger market-impact modelling, transaction-cost and slippage models, optimized liquidation ordering, richer intraday liquidity analysis and advanced regime models. Other planned work: official disclosure and threat-intelligence collectors, and persistent login sessions with password reset.
 
 ---
 

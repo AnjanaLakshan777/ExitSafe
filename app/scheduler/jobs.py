@@ -7,6 +7,7 @@ from app.intelligence.collectors.company_disclosure_collector import collect_com
 from app.intelligence.collectors.market_event_collector import collect_market_events
 from app.intelligence.collectors.news_collector import collect_news
 from app.intelligence.collectors.threat_intel_collector import collect_threat_intel
+from app.intelligence.market_tracking import run_scheduled_update
 from app.intelligence.models import Collector
 from app.intelligence.price_updater import update_tracked_csv
 from app.intelligence.settings import load_settings
@@ -37,8 +38,11 @@ def collect_intelligence():
 
 
 def refresh_market_data():
-    """Append the latest session's prices to the tracked market-data CSV."""
-    update_tracked_csv(load_settings())
+    """Store the latest session's prices for every tracked dataset (and the tracked CSV)."""
+    settings = load_settings()
+    run_scheduled_update(settings)
+    if settings.tracked_csv.exists():
+        update_tracked_csv(settings)
 
 
 def archive_events():

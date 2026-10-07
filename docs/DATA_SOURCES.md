@@ -318,6 +318,14 @@ updater does this for every row it appends:
   `source`, `source_priority`, `source_url`, the time it was written, and whether
   it is used in quantitative analysis by default (`quantitative_analysis`).
 
+**Tracked market data** (see `docs/TRACKED_MARKET_DATA.md`) stores collected
+prices in the `market_observations` table with the same `source`,
+`source_priority`, `source_url` and validation fields, one row per symbol, date
+and source. When the dashboard rebuilds a tracked dataset it writes those rows
+into the uploaded file's layout with their `Source` value, so the same per-row
+source handling and analysis selection apply. Each update is recorded in
+`market_data_update_runs` instead of a local log file.
+
 Gemini prices are **not equivalent to exchange data**. The updater checks that
 they are positive, that high ≥ low and that they are at most 7 days old, but
 that only removes obviously broken values; it does not verify them.
